@@ -193,6 +193,9 @@ pub const StringOrBuffer = union(Tag) {
     pub fn toJS(this: StringOrBuffer, ctx: JSC.C.JSContextRef, exception: JSC.C.ExceptionRef) JSC.C.JSValueRef {
         return switch (this) {
             .string => {
+                if (this.string.len == 0)
+                    return JSC.ZigString.Empty.toValue(ctx).asObjectRef();
+
                 const input = this.string;
                 if (strings.toUTF16Alloc(bun.default_allocator, input, false) catch null) |utf16| {
                     bun.default_allocator.free(bun.constStrToU8(input));
@@ -211,11 +214,22 @@ pub const StringOrBuffer = union(Tag) {
                 var zig_str = value.toSlice(global, allocator);
                 return StringOrBuffer{ .string = zig_str.slice() };
             },
-            JSC.JSValue.JSType.ArrayBuffer => StringOrBuffer{
-                .buffer = Buffer.fromArrayBuffer(global.ref(), value, exception),
-            },
-            JSC.JSValue.JSType.Uint8Array, JSC.JSValue.JSType.DataView => StringOrBuffer{
-                .buffer = Buffer.fromArrayBuffer(global.ref(), value, exception),
+
+            .ArrayBuffer,
+            .Int8Array,
+            .Uint8Array,
+            .Uint8ClampedArray,
+            .Int16Array,
+            .Uint16Array,
+            .Int32Array,
+            .Uint32Array,
+            .Float32Array,
+            .Float64Array,
+            .BigInt64Array,
+            .BigUint64Array,
+            .DataView,
+            => StringOrBuffer{
+                .buffer = Buffer.fromArrayBuffer(global, value, exception),
             },
             else => null,
         };
@@ -240,6 +254,9 @@ pub const StringOrNodeBuffer = union(Tag) {
         return switch (this) {
             .string => {
                 const input = this.string;
+                if (this.string.len == 0)
+                    return JSC.ZigString.Empty.toValue(ctx).asObjectRef();
+
                 if (strings.toUTF16Alloc(bun.default_allocator, input, false) catch null) |utf16| {
                     bun.default_allocator.free(bun.constStrToU8(input));
                     return JSC.ZigString.toExternalU16(utf16.ptr, utf16.len, ctx.ptr()).asObjectRef();
@@ -257,11 +274,22 @@ pub const StringOrNodeBuffer = union(Tag) {
                 var zig_str = value.toSlice(global, allocator);
                 return StringOrNodeBuffer{ .string = zig_str.slice() };
             },
-            JSC.JSValue.JSType.ArrayBuffer => StringOrNodeBuffer{
-                .buffer = Buffer.fromArrayBuffer(global.ref(), value, exception),
-            },
-            JSC.JSValue.JSType.Uint8Array, JSC.JSValue.JSType.DataView => StringOrBuffer{
-                .buffer = Buffer.fromArrayBuffer(global.ref(), value, exception),
+
+            .ArrayBuffer,
+            .Int8Array,
+            .Uint8Array,
+            .Uint8ClampedArray,
+            .Int16Array,
+            .Uint16Array,
+            .Int32Array,
+            .Uint32Array,
+            .Float32Array,
+            .Float64Array,
+            .BigInt64Array,
+            .BigUint64Array,
+            .DataView,
+            => StringOrBuffer{
+                .buffer = Buffer.fromArrayBuffer(global, value, exception),
             },
             else => null,
         };
@@ -311,7 +339,20 @@ pub const SliceOrBuffer = union(Tag) {
                 var zig_str = value.toSlice(global, allocator);
                 return SliceOrBuffer{ .string = zig_str };
             },
-            JSC.JSValue.JSType.ArrayBuffer, JSC.JSValue.JSType.Uint8Array, JSC.JSValue.JSType.DataView => SliceOrBuffer{
+            .ArrayBuffer,
+            .Int8Array,
+            .Uint8Array,
+            .Uint8ClampedArray,
+            .Int16Array,
+            .Uint16Array,
+            .Int32Array,
+            .Uint32Array,
+            .Float32Array,
+            .Float64Array,
+            .BigInt64Array,
+            .BigUint64Array,
+            .DataView,
+            => SliceOrBuffer{
                 .buffer = JSC.MarkedArrayBuffer{
                     .buffer = value.asArrayBuffer(global) orelse return null,
                     .allocator = null,
@@ -614,7 +655,7 @@ pub const ArgumentsSlice = struct {
 
     pub fn unprotect(this: *ArgumentsSlice) void {
         var iter = this.protected.iterator(.{});
-        var ctx = this.vm.global.ref();
+        var ctx = this.vm.global;
         while (iter.next()) |i| {
             JSC.C.JSValueUnprotect(ctx, this.all[i].asObjectRef());
         }
@@ -630,7 +671,7 @@ pub const ArgumentsSlice = struct {
         if (this.remaining.len == 0) return;
         const index = this.all.len - this.remaining.len;
         this.protected.set(index);
-        JSC.C.JSValueProtect(this.vm.global.ref(), this.all[index].asObjectRef());
+        JSC.C.JSValueProtect(this.vm.global, this.all[index].asObjectRef());
         this.eat();
     }
 
@@ -758,6 +799,16 @@ pub const PathOrFileDescriptor = union(Tag) {
             .path => std.hash.Wyhash.hash(0, this.path.slice()),
             .fd => std.hash.Wyhash.hash(0, std.mem.asBytes(&this.fd)),
         };
+    }
+
+    pub fn format(this: PathOrFileDescriptor, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        if (fmt.len != 0 and fmt != "s") {
+            @compileError("Unsupported format argument: '" ++ fmt ++ "'.");
+        }
+        switch (this) {
+            .path => |p| try writer.writeAll(p.slice()),
+            .fd => |fd| try writer.print("{d}", .{fd}),
+        }
     }
 
     pub fn fromJS(ctx: JSC.C.JSContextRef, arguments: *ArgumentsSlice, exception: JSC.C.ExceptionRef) ?PathOrFileDescriptor {
@@ -1318,7 +1369,7 @@ pub const Emitter = struct {
 
                         if (once[i]) {
                             this.once_count -= 1;
-                            JSC.C.JSValueUnprotect(globalThis.ref(), callback.asObjectRef());
+                            JSC.C.JSValueUnprotect(globalThis, callback.asObjectRef());
                             this.list.orderedRemove(i);
                             slice = this.list.slice();
                             callbacks = slice.items(.callback);
@@ -1374,9 +1425,9 @@ pub const Path = struct {
     pub fn basename(globalThis: *JSC.JSGlobalObject, isWindows: bool, args_ptr: [*]JSC.JSValue, args_len: u16) callconv(.C) JSC.JSValue {
         if (comptime is_bindgen) return JSC.JSValue.jsUndefined();
         if (args_len == 0) {
-            return JSC.toInvalidArguments("path is required", .{}, globalThis.ref());
+            return JSC.toInvalidArguments("path is required", .{}, globalThis);
         }
-        var stack_fallback = std.heap.stackFallback(4096, JSC.getAllocator(globalThis.ref()));
+        var stack_fallback = std.heap.stackFallback(4096, JSC.getAllocator(globalThis));
         var allocator = stack_fallback.get();
 
         var arguments: []JSC.JSValue = args_ptr[0..args_len];
@@ -1405,9 +1456,9 @@ pub const Path = struct {
     pub fn dirname(globalThis: *JSC.JSGlobalObject, isWindows: bool, args_ptr: [*]JSC.JSValue, args_len: u16) callconv(.C) JSC.JSValue {
         if (comptime is_bindgen) return JSC.JSValue.jsUndefined();
         if (args_len == 0) {
-            return JSC.toInvalidArguments("path is required", .{}, globalThis.ref());
+            return JSC.toInvalidArguments("path is required", .{}, globalThis);
         }
-        var stack_fallback = std.heap.stackFallback(4096, JSC.getAllocator(globalThis.ref()));
+        var stack_fallback = std.heap.stackFallback(4096, JSC.getAllocator(globalThis));
         var allocator = stack_fallback.get();
 
         var arguments: []JSC.JSValue = args_ptr[0..args_len];
@@ -1426,9 +1477,9 @@ pub const Path = struct {
     pub fn extname(globalThis: *JSC.JSGlobalObject, _: bool, args_ptr: [*]JSC.JSValue, args_len: u16) callconv(.C) JSC.JSValue {
         if (comptime is_bindgen) return JSC.JSValue.jsUndefined();
         if (args_len == 0) {
-            return JSC.toInvalidArguments("path is required", .{}, globalThis.ref());
+            return JSC.toInvalidArguments("path is required", .{}, globalThis);
         }
-        var stack_fallback = std.heap.stackFallback(4096, JSC.getAllocator(globalThis.ref()));
+        var stack_fallback = std.heap.stackFallback(4096, JSC.getAllocator(globalThis));
         var allocator = stack_fallback.get();
         var arguments: []JSC.JSValue = args_ptr[0..args_len];
 
@@ -1442,15 +1493,15 @@ pub const Path = struct {
     pub fn format(globalThis: *JSC.JSGlobalObject, isWindows: bool, args_ptr: [*]JSC.JSValue, args_len: u16) callconv(.C) JSC.JSValue {
         if (comptime is_bindgen) return JSC.JSValue.jsUndefined();
         if (args_len == 0) {
-            return JSC.toInvalidArguments("pathObject is required", .{}, globalThis.ref());
+            return JSC.toInvalidArguments("pathObject is required", .{}, globalThis);
         }
         var path_object: JSC.JSValue = args_ptr[0];
         const js_type = path_object.jsType();
         if (!js_type.isObject()) {
-            return JSC.toInvalidArguments("pathObject is required", .{}, globalThis.ref());
+            return JSC.toInvalidArguments("pathObject is required", .{}, globalThis);
         }
 
-        var stack_fallback = std.heap.stackFallback(4096, JSC.getAllocator(globalThis.ref()));
+        var stack_fallback = std.heap.stackFallback(4096, JSC.getAllocator(globalThis));
         var allocator = stack_fallback.get();
         var dir = JSC.ZigString.Empty;
         var name_ = JSC.ZigString.Empty;
@@ -1630,7 +1681,7 @@ pub const Path = struct {
     pub fn parse(globalThis: *JSC.JSGlobalObject, isWindows: bool, args_ptr: [*]JSC.JSValue, args_len: u16) callconv(.C) JSC.JSValue {
         if (comptime is_bindgen) return JSC.JSValue.jsUndefined();
         if (args_len == 0 or !args_ptr[0].jsType().isStringLike()) {
-            return JSC.toInvalidArguments("path string is required", .{}, globalThis.ref());
+            return JSC.toInvalidArguments("path string is required", .{}, globalThis);
         }
         var path_slice: JSC.ZigString.Slice = args_ptr[0].toSlice(globalThis, heap_allocator);
         defer path_slice.deinit();
@@ -1785,44 +1836,40 @@ pub const Path = struct {
 pub const Process = struct {
     pub fn getArgv(globalObject: *JSC.JSGlobalObject) callconv(.C) JSC.JSValue {
         var vm = globalObject.bunVM();
-        if (vm.argv.len == 0)
-            return JSC.JSValue.createStringArray(globalObject, null, 0, false);
 
         // Allocate up to 32 strings in stack
         var stack_fallback_allocator = std.heap.stackFallback(
-            32 * @sizeOf(JSC.ZigString),
+            32 * @sizeOf(JSC.ZigString) + (bun.MAX_PATH_BYTES + 1) + 32,
             heap_allocator,
         );
         var allocator = stack_fallback_allocator.get();
 
-        // If it was launched with bun run or bun test, skip it
-        const skip: usize = @as(usize, @boolToInt(
-            vm.argv.len > 1 and (strings.eqlComptime(vm.argv[0], "run") or strings.eqlComptime(vm.argv[0], "wiptest")),
-        ));
-
         var args = allocator.alloc(
             JSC.ZigString,
-            vm.argv.len + 1,
+            // argv omits "bun" because it could be "bun run" or "bun" and it's kind of ambiguous
+            // argv also omits the script name
+            vm.argv.len + 2,
         ) catch unreachable;
         var args_list = std.ArrayListUnmanaged(JSC.ZigString){ .items = args, .capacity = args.len };
         args_list.items.len = 0;
+
+        // get the bun executable
+        // without paying the cost of a syscall to resolve the full path
+        args_list.appendAssumeCapacity(
+            JSC.ZigString.init(
+                std.fs.selfExePathAlloc(allocator) catch "bun",
+            ).withEncoding(),
+        );
+
+        if (vm.main.len > 0)
+            args_list.appendAssumeCapacity(JSC.ZigString.init(vm.main).withEncoding());
+
         defer allocator.free(args);
         {
-            var args_iterator = std.process.args();
-
-            if (args_iterator.next()) |arg0| {
-                var argv0 = JSC.ZigString.init(std.mem.span(arg0));
-                argv0.setOutputEncoding();
+            for (vm.argv) |arg0| {
+                const argv0 = JSC.ZigString.init(arg0).withEncoding();
                 // https://github.com/yargs/yargs/blob/adb0d11e02c613af3d9427b3028cc192703a3869/lib/utils/process-argv.ts#L1
                 args_list.appendAssumeCapacity(argv0);
-            }
-        }
-
-        if (vm.argv.len > skip) {
-            for (vm.argv[skip..]) |arg| {
-                var str = JSC.ZigString.init(arg);
-                str.setOutputEncoding();
-                args_list.appendAssumeCapacity(str);
             }
         }
 

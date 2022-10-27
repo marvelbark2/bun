@@ -112,15 +112,11 @@ private:
     typedef union AnyWebSocket {
         WebSocketClient* client;
         WebSocketClientTLS* clientSSL;
-        uWS::WebSocket<false, true, WebCore::WebSocket*>* server;
-        uWS::WebSocket<true, true, WebCore::WebSocket*>* serverSSL;
     } AnyWebSocket;
     enum ConnectedWebSocketKind {
         None,
         Client,
         ClientSSL,
-        Server,
-        ServerSSL
     };
 
     explicit WebSocket(ScriptExecutionContext&);
@@ -139,7 +135,7 @@ private:
     void refEventTarget() final { ref(); }
     void derefEventTarget() final { deref(); }
 
-    void didReceiveMessageError(WTF::StringImpl::StaticStringImpl* reason);
+    void didReceiveMessageError(unsigned short code, WTF::StringImpl::StaticStringImpl* reason);
     void didUpdateBufferedAmount(unsigned bufferedAmount);
     void didStartClosingHandshake();
 

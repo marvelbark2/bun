@@ -132,13 +132,15 @@ void NapiRef::unref()
     bool clear = refCount == 1;
     refCount = refCount > 0 ? refCount - 1 : 0;
     if (clear) {
-        JSC::JSValue val = strongRef.get();
-        if (val.isString()) {
-            weakValueRef.setString(val.toString(globalObject.get()), weakValueHandleOwner(), this);
-        } else if (val.isObject()) {
-            weakValueRef.setObject(val.getObject(), weakValueHandleOwner(), this);
-        } else {
-            weakValueRef.setPrimitive(val);
+        if (JSC::JSValue val = strongRef.get()) {
+
+            if (val.isString()) {
+                weakValueRef.setString(val.toString(globalObject.get()), weakValueHandleOwner(), this);
+            } else if (val.isObject()) {
+                weakValueRef.setObject(val.getObject(), weakValueHandleOwner(), this);
+            } else {
+                weakValueRef.setPrimitive(val);
+            }
         }
         strongRef.clear();
     }
@@ -478,6 +480,7 @@ extern "C" void napi_module_register(napi_module* mod)
 {
     auto* globalObject = Bun__getDefaultGlobal();
     JSC::VM& vm = globalObject->vm();
+    globalObject->napiModuleRegisterCallCount++;
     JSC::JSObject* object = globalObject->pendingNapiModule.getObject();
     if (!object) {
         object = JSC::constructEmptyObject(globalObject);
@@ -521,16 +524,34 @@ extern "C" napi_status napi_wrap(napi_env env,
     napi_value js_object,
     void* native_object,
     napi_finalize finalize_cb,
+
+    // Typically when wrapping a class instance, a finalize callback should be
+    // provided that simply deletes the native instance that is received as the
+    // data argument to the finalize callback.
     void* finalize_hint,
+
     napi_ref* result)
 {
-    if (!toJS(js_object).isObject()) {
-        return napi_arraybuffer_expected;
+    JSValue value = toJS(js_object);
+    if (!value || value.isUndefinedOrNull()) {
+        return napi_object_expected;
     }
 
     auto* globalObject = toJS(env);
     auto& vm = globalObject->vm();
-    auto* val = jsDynamicCast<NapiPrototype*>(toJS(js_object));
+    auto* val = jsDynamicCast<NapiPrototype*>(value);
+
+    if (!val) {
+        return napi_object_expected;
+    }
+
+    if (val->napiRef) {
+        // Calling napi_wrap() a second time on an object will return an error.
+        // To associate another native instance with the object, use
+        // napi_remove_wrap() first.
+        return napi_invalid_arg;
+    }
+
     auto clientData = WebCore::clientData(vm);
 
     auto* ref = new NapiRef(globalObject, 0);
@@ -550,6 +571,36 @@ extern "C" napi_status napi_wrap(napi_env env,
     if (result) {
         *result = reinterpret_cast<napi_ref>(ref);
     }
+
+    return napi_ok;
+}
+
+extern "C" napi_status napi_remove_wrap(napi_env env, napi_value js_object,
+    void** result)
+{
+    JSValue value = toJS(js_object);
+    if (!value || value.isUndefinedOrNull()) {
+        return napi_object_expected;
+    }
+
+    auto* globalObject = toJS(env);
+    auto& vm = globalObject->vm();
+    auto* val = jsDynamicCast<NapiPrototype*>(value);
+
+    if (!val) {
+        return napi_object_expected;
+    }
+
+    if (!val->napiRef) {
+        // not sure if this should succeed or return an error
+        return napi_ok;
+    }
+
+    *result = val->napiRef->data;
+
+    auto* ref = val->napiRef;
+    val->napiRef = nullptr;
+    delete ref;
 
     return napi_ok;
 }
@@ -716,8 +767,7 @@ extern "C" napi_status napi_create_reference(napi_env env, napi_value value,
 
     JSC::JSValue val = toJS(value);
 
-    if (!val.isObject()) {
-
+    if (!val || !val.isObject()) {
         return napi_object_expected;
     }
 
@@ -748,6 +798,17 @@ extern "C" napi_status napi_create_reference(napi_env env, napi_value value,
     *result = toNapi(ref);
 
     return napi_ok;
+}
+
+extern "C" void napi_set_ref(NapiRef* ref, JSC__JSValue val_)
+{
+
+    JSC::JSValue val = JSC::JSValue::decode(val_);
+    if (val) {
+        ref->strongRef.set(ref->globalObject->vm(), val);
+    } else {
+        ref->strongRef.clear();
+    }
 }
 
 extern "C" napi_status napi_add_finalizer(napi_env env, napi_value js_object,
@@ -789,7 +850,13 @@ extern "C" napi_status napi_get_reference_value(napi_env env, napi_ref ref,
 {
     NapiRef* napiRef = toJS(ref);
     *result = toNapi(napiRef->value());
+
     return napi_ok;
+}
+
+extern "C" JSC__JSValue napi_get_reference_value_internal(NapiRef* napiRef)
+{
+    return JSC::JSValue::encode(napiRef->value());
 }
 
 extern "C" napi_status napi_reference_ref(napi_env env, napi_ref ref,
@@ -806,6 +873,12 @@ extern "C" napi_status napi_delete_reference(napi_env env, napi_ref ref)
     NapiRef* napiRef = toJS(ref);
     napiRef->~NapiRef();
     return napi_ok;
+}
+
+extern "C" void napi_delete_reference_internal(napi_ref ref)
+{
+    NapiRef* napiRef = toJS(ref);
+    napiRef->~NapiRef();
 }
 
 extern "C" napi_status napi_is_detached_arraybuffer(napi_env env,

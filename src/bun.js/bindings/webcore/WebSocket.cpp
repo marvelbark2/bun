@@ -69,8 +69,6 @@
 #include <wtf/text/CString.h>
 #include <wtf/text/StringBuilder.h>
 
-#include <uws/src/App.h>
-
 // #if USE(WEB_THREAD)
 // #include "WebCoreThreadRun.h"
 // #endif
@@ -182,14 +180,14 @@ WebSocket::~WebSocket()
         Bun__WebSocketClientTLS__finalize(this->m_connectedWebSocket.clientSSL);
         break;
     }
-    case ConnectedWebSocketKind::Server: {
-        this->m_connectedWebSocket.server->end(None);
-        break;
-    }
-    case ConnectedWebSocketKind::ServerSSL: {
-        this->m_connectedWebSocket.serverSSL->end(None);
-        break;
-    }
+    // case ConnectedWebSocketKind::Server: {
+    //     this->m_connectedWebSocket.server->end(None);
+    //     break;
+    // }
+    // case ConnectedWebSocketKind::ServerSSL: {
+    //     this->m_connectedWebSocket.serverSSL->end(None);
+    //     break;
+    // }
     default: {
         break;
     }
@@ -484,7 +482,6 @@ ExceptionOr<void> WebSocket::send(ArrayBufferView& arrayBufferView)
 
 void WebSocket::sendWebSocketData(const char* baseAddress, size_t length)
 {
-    uWS::OpCode opCode = uWS::OpCode::BINARY;
 
     switch (m_connectedWebSocketKind) {
     case ConnectedWebSocketKind::Client: {
@@ -497,16 +494,16 @@ void WebSocket::sendWebSocketData(const char* baseAddress, size_t length)
         Bun__WebSocketClientTLS__writeBinaryData(this->m_connectedWebSocket.clientSSL, reinterpret_cast<const unsigned char*>(baseAddress), length);
         break;
     }
-    case ConnectedWebSocketKind::Server: {
-        this->m_connectedWebSocket.server->send({ baseAddress, length }, opCode);
-        this->m_bufferedAmount = this->m_connectedWebSocket.server->getBufferedAmount();
-        break;
-    }
-    case ConnectedWebSocketKind::ServerSSL: {
-        this->m_connectedWebSocket.serverSSL->send({ baseAddress, length }, opCode);
-        this->m_bufferedAmount = this->m_connectedWebSocket.serverSSL->getBufferedAmount();
-        break;
-    }
+    // case ConnectedWebSocketKind::Server: {
+    //     this->m_connectedWebSocket.server->send({ baseAddress, length }, opCode);
+    //     this->m_bufferedAmount = this->m_connectedWebSocket.server->getBufferedAmount();
+    //     break;
+    // }
+    // case ConnectedWebSocketKind::ServerSSL: {
+    //     this->m_connectedWebSocket.serverSSL->send({ baseAddress, length }, opCode);
+    //     this->m_bufferedAmount = this->m_connectedWebSocket.serverSSL->getBufferedAmount();
+    //     break;
+    // }
     default: {
         RELEASE_ASSERT_NOT_REACHED();
     }
@@ -529,18 +526,18 @@ void WebSocket::sendWebSocketString(const String& message)
         Bun__WebSocketClientTLS__writeString(this->m_connectedWebSocket.clientSSL, &zigStr);
         break;
     }
-    case ConnectedWebSocketKind::Server: {
-        auto utf8 = message.utf8(StrictConversionReplacingUnpairedSurrogatesWithFFFD);
-        this->m_connectedWebSocket.server->send({ utf8.data(), utf8.length() }, uWS::OpCode::TEXT);
-        this->m_bufferedAmount = this->m_connectedWebSocket.server->getBufferedAmount();
-        break;
-    }
-    case ConnectedWebSocketKind::ServerSSL: {
-        auto utf8 = message.utf8(StrictConversionReplacingUnpairedSurrogatesWithFFFD);
-        this->m_connectedWebSocket.serverSSL->send({ utf8.data(), utf8.length() }, uWS::OpCode::TEXT);
-        this->m_bufferedAmount = this->m_connectedWebSocket.serverSSL->getBufferedAmount();
-        break;
-    }
+    // case ConnectedWebSocketKind::Server: {
+    //     auto utf8 = message.utf8(StrictConversionReplacingUnpairedSurrogatesWithFFFD);
+    //     this->m_connectedWebSocket.server->send({ utf8.data(), utf8.length() }, uWS::OpCode::TEXT);
+    //     this->m_bufferedAmount = this->m_connectedWebSocket.server->getBufferedAmount();
+    //     break;
+    // }
+    // case ConnectedWebSocketKind::ServerSSL: {
+    //     auto utf8 = message.utf8(StrictConversionReplacingUnpairedSurrogatesWithFFFD);
+    //     this->m_connectedWebSocket.serverSSL->send({ utf8.data(), utf8.length() }, uWS::OpCode::TEXT);
+    //     this->m_bufferedAmount = this->m_connectedWebSocket.serverSSL->getBufferedAmount();
+    //     break;
+    // }
     default: {
         RELEASE_ASSERT_NOT_REACHED();
     }
@@ -592,16 +589,16 @@ ExceptionOr<void> WebSocket::close(std::optional<unsigned short> optionalCode, c
         // this->m_bufferedAmount = this->m_connectedWebSocket.clientSSL->getBufferedAmount();
         break;
     }
-    case ConnectedWebSocketKind::Server: {
-        // this->m_connectedWebSocket.server->end(code, { utf8.data(), utf8.length() });
-        // this->m_bufferedAmount = this->m_connectedWebSocket.server->getBufferedAmount();
-        break;
-    }
-    case ConnectedWebSocketKind::ServerSSL: {
-        // this->m_connectedWebSocket.serverSSL->end(code, { utf8.data(), utf8.length() });
-        // this->m_bufferedAmount = this->m_connectedWebSocket.serverSSL->getBufferedAmount();
-        break;
-    }
+    // case ConnectedWebSocketKind::Server: {
+    // this->m_connectedWebSocket.server->end(code, { utf8.data(), utf8.length() });
+    // this->m_bufferedAmount = this->m_connectedWebSocket.server->getBufferedAmount();
+    //     break;
+    // }
+    // case ConnectedWebSocketKind::ServerSSL: {
+    //     // this->m_connectedWebSocket.serverSSL->end(code, { utf8.data(), utf8.length() });
+    //     // this->m_bufferedAmount = this->m_connectedWebSocket.serverSSL->getBufferedAmount();
+    //     break;
+    // }
     default: {
         break;
     }
@@ -822,7 +819,7 @@ void WebSocket::didReceiveBinaryData(Vector<uint8_t>&& binaryData)
     // });
 }
 
-void WebSocket::didReceiveMessageError(WTF::StringImpl::StaticStringImpl* reason)
+void WebSocket::didReceiveMessageError(unsigned short code, WTF::StringImpl::StaticStringImpl* reason)
 {
     LOG(Network, "WebSocket %p didReceiveErrorMessage()", this);
     // queueTaskKeepingObjectAlive(*this, TaskSource::WebSocket, [this, reason = WTFMove(reason)] {
@@ -832,7 +829,7 @@ void WebSocket::didReceiveMessageError(WTF::StringImpl::StaticStringImpl* reason
     if (auto* context = scriptExecutionContext()) {
         this->m_pendingActivityCount++;
         // https://html.spec.whatwg.org/multipage/web-sockets.html#feedback-from-the-protocol:concept-websocket-closed, we should synchronously fire a close event.
-        dispatchEvent(CloseEvent::create(false, 0, WTF::String(reason)));
+        dispatchEvent(CloseEvent::create(code < 1002, code, WTF::String(reason)));
         this->m_pendingActivityCount--;
     }
 }
@@ -955,158 +952,158 @@ void WebSocket::didFailWithErrorCode(int32_t code)
     // invalid_response
     case 1: {
         auto message = MAKE_STATIC_STRING_IMPL("Invalid response");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // expected_101_status_code
     case 2: {
         auto message = MAKE_STATIC_STRING_IMPL("Expected 101 status code");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // missing_upgrade_header
     case 3: {
         auto message = MAKE_STATIC_STRING_IMPL("Missing upgrade header");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // missing_connection_header
     case 4: {
         auto message = MAKE_STATIC_STRING_IMPL("Missing connection header");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // missing_websocket_accept_header
     case 5: {
         auto message = MAKE_STATIC_STRING_IMPL("Missing websocket accept header");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // invalid_upgrade_header
     case 6: {
         auto message = MAKE_STATIC_STRING_IMPL("Invalid upgrade header");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // invalid_connection_header
     case 7: {
         auto message = MAKE_STATIC_STRING_IMPL("Invalid connection header");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // invalid_websocket_version
     case 8: {
         auto message = MAKE_STATIC_STRING_IMPL("Invalid websocket version");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // mismatch_websocket_accept_header
     case 9: {
         auto message = MAKE_STATIC_STRING_IMPL("Mismatch websocket accept header");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // missing_client_protocol
     case 10: {
         auto message = MAKE_STATIC_STRING_IMPL("Missing client protocol");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // mismatch_client_protocol
     case 11: {
         auto message = MAKE_STATIC_STRING_IMPL("Mismatch client protocol");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // timeout
     case 12: {
         auto message = MAKE_STATIC_STRING_IMPL("Timeout");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1013, message);
         break;
     }
     // closed
     case 13: {
         auto message = MAKE_STATIC_STRING_IMPL("Closed by client");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1000, message);
         break;
     }
     // failed_to_write
     case 14: {
         auto message = MAKE_STATIC_STRING_IMPL("Failed to write");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1006, message);
         break;
     }
     // failed_to_connect
     case 15: {
         auto message = MAKE_STATIC_STRING_IMPL("Failed to connect");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1006, message);
         break;
     }
     // headers_too_large
     case 16: {
         auto message = MAKE_STATIC_STRING_IMPL("Headers too large");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1007, message);
         break;
     }
     // ended
     case 17: {
         auto message = MAKE_STATIC_STRING_IMPL("Closed by server");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1001, message);
         break;
     }
 
     // failed_to_allocate_memory
     case 18: {
         auto message = MAKE_STATIC_STRING_IMPL("Failed to allocate memory");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1001, message);
         break;
     }
     // control_frame_is_fragmented
     case 19: {
         auto message = MAKE_STATIC_STRING_IMPL("Protocol error - control frame is fragmented");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // invalid_control_frame
     case 20: {
         auto message = MAKE_STATIC_STRING_IMPL("Protocol error - invalid control frame");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // compression_unsupported
     case 21: {
         auto message = MAKE_STATIC_STRING_IMPL("Compression not implemented yet");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1011, message);
         break;
     }
     // unexpected_mask_from_server
     case 22: {
         auto message = MAKE_STATIC_STRING_IMPL("Protocol error - unexpected mask from server");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // expected_control_frame
     case 23: {
         auto message = MAKE_STATIC_STRING_IMPL("Protocol error - expected control frame");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // unsupported_control_frame
     case 24: {
         auto message = MAKE_STATIC_STRING_IMPL("Protocol error - unsupported control frame");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // unexpected_opcode
     case 25: {
         auto message = MAKE_STATIC_STRING_IMPL("Protocol error - unexpected opcode");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1002, message);
         break;
     }
     // invalid_utf8
     case 26: {
         auto message = MAKE_STATIC_STRING_IMPL("Server sent invalid UTF8");
-        didReceiveMessageError(message);
+        didReceiveMessageError(1003, message);
         break;
     }
     }

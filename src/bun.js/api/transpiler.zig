@@ -367,7 +367,7 @@ fn transformOptionsFromJSC(ctx: JSC.C.JSContextRef, temp_allocator: std.mem.Allo
                 .skip_empty_name = true,
 
                 .include_value = true,
-            }).init(globalThis.ref(), define.asObjectRef());
+            }).init(globalThis, define.asObjectRef());
             defer define_iter.deinit();
 
             // cannot be a temporary because it may be loaded on different threads.
@@ -862,7 +862,7 @@ pub fn scan(
     arguments: []const js.JSValueRef,
     exception: js.ExceptionRef,
 ) JSC.C.JSObjectRef {
-    JSC.markBinding();
+    JSC.markBinding(@src());
     var args = JSC.Node.ArgumentsSlice.init(ctx.bunVM(), @ptrCast([*]const JSC.JSValue, arguments.ptr)[0..arguments.len]);
     defer args.arena.deinit();
     const code_arg = args.next() orelse {
@@ -954,7 +954,7 @@ pub fn transform(
     arguments: []const js.JSValueRef,
     exception: js.ExceptionRef,
 ) JSC.C.JSObjectRef {
-    JSC.markBinding();
+    JSC.markBinding(@src());
 
     var args = JSC.Node.ArgumentsSlice.init(ctx.bunVM(), @ptrCast([*]const JSC.JSValue, arguments.ptr)[0..arguments.len]);
     defer args.arena.deinit();
@@ -1119,16 +1119,17 @@ pub fn transformSync(
     buffer_writer = printer.ctx;
     var out = JSC.ZigString.init(buffer_writer.written);
     out.mark();
+    out.setOutputEncoding();
 
     return out.toValueGC(ctx.ptr()).asObjectRef();
 }
 
 fn namedExportsToJS(global: *JSGlobalObject, named_exports: JSAst.Ast.NamedExports) JSC.JSValue {
     if (named_exports.count() == 0)
-        return JSC.JSValue.fromRef(JSC.C.JSObjectMakeArray(global.ref(), 0, null, null));
+        return JSC.JSValue.fromRef(JSC.C.JSObjectMakeArray(global, 0, null, null));
 
     var named_exports_iter = named_exports.iterator();
-    var stack_fallback = std.heap.stackFallback(@sizeOf(JSC.ZigString) * 32, getAllocator(global.ref()));
+    var stack_fallback = std.heap.stackFallback(@sizeOf(JSC.ZigString) * 32, getAllocator(global));
     var allocator = stack_fallback.get();
     var names = allocator.alloc(
         JSC.ZigString,
@@ -1151,7 +1152,7 @@ fn namedImportsToJS(
     import_records: []const ImportRecord,
     exception: JSC.C.ExceptionRef,
 ) JSC.JSValue {
-    var stack_fallback = std.heap.stackFallback(@sizeOf(JSC.C.JSObjectRef) * 32, getAllocator(global.ref()));
+    var stack_fallback = std.heap.stackFallback(@sizeOf(JSC.C.JSObjectRef) * 32, getAllocator(global));
     var allocator = stack_fallback.get();
 
     var i: usize = 0;
@@ -1172,7 +1173,7 @@ fn namedImportsToJS(
         i += 1;
     }
 
-    return JSC.JSValue.fromRef(JSC.C.JSObjectMakeArray(global.ref(), i, array_items.ptr, exception));
+    return JSC.JSValue.fromRef(JSC.C.JSObjectMakeArray(global, i, array_items.ptr, exception));
 }
 
 pub fn scanImports(

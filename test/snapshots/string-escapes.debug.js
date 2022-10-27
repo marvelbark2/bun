@@ -1,12 +1,11 @@
 import {
 __require as require
 } from "http://localhost:8080/bun:wrap";
-import * as $2f488e5b from "http://localhost:8080/node_modules/react/jsx-dev-runtime.js";
-var JSX = require($2f488e5b);
-import * as $bbcd215f from "http://localhost:8080/node_modules/react/index.js";
-var JSXClassic = require($bbcd215f);
+import * as $a77976b9 from "http://localhost:8080/node_modules/react/jsx-dev-runtime.js";
+var JSX = require($a77976b9);
+import * as $a66742df from "http://localhost:8080/node_modules/react/index.js";
+var JSXClassic = require($a66742df);
 var jsx = require(JSX).jsxDEV, JSXFrag = require(JSXClassic).Fragment;
-
 var tab = "\t";
 var f = "";
 var f = "\u2087";
@@ -24,7 +23,7 @@ var obj = {
   "\uD83D\uDD75\uD83C\uDFFD\u200D\u2642\uFE0F": "\uD83D\uDD75\uD83C\uDFFD\u200D\u2642\uFE0F",
   "\u32E1": "\u32E1",
   "\u263A": "\u263A",
-  "シ": "\u30B7",
+  シ: "\u30B7",
   "\uD83D\uDC4B": "\uD83D\uDC4B",
   f,
   "\u2639": "\u2639",

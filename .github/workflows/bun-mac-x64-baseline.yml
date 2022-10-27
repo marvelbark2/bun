@@ -28,6 +28,7 @@ jobs:
   macos-object-files:
     name: macOS Object
     runs-on: zig-object
+    concurrency: macos
     strategy:
       matrix:
         include:
@@ -63,8 +64,8 @@ jobs:
           context: .
           push: false
           tags: ghcr.io/oven-sh/bun-obj:${{github.sha}}-${{matrix.cpu}}-${{matrix.arch}}-macos-baseline
-          cache-from: type=registry,ref=ghcr.io/oven-sh/bun-obj:buildcache-bust-3--${{matrix.cpu}}-${{matrix.arch}}-macos-baseline
-          cache-to: type=registry,ref=ghcr.io/oven-sh/bun-obj:buildcache-bust-3--${{matrix.cpu}}-${{matrix.arch}}-macos-baseline,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           build-args: |
             ARCH=${{ matrix.arch }}
             BUILDARCH=amd64
@@ -91,7 +92,7 @@ jobs:
             obj: bun-obj-darwin-x64-baseline
             runner: macos-11
             artifact: bun-obj-darwin-x64-baseline
-            webkit_url: "https://github.com/oven-sh/WebKit/releases/download/aug27-1/bun-webkit-macos-amd64-lto.tar.gz"
+            webkit_url: "https://github.com/oven-sh/WebKit/releases/download/oct8/bun-webkit-macos-amd64-lto.tar.gz"
             dependencies: true
             compile_obj: false
           # - cpu: haswell
@@ -100,7 +101,7 @@ jobs:
           #   obj: bun-obj-darwin-x64
           #   runner: macos-11
           #   artifact: bun-obj-darwin-x64
-          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/aug27-1/bun-webkit-macos-amd64-lto.tar.gz"
+          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/oct8/bun-webkit-macos-amd64-lto.tar.gz"
           #   dependencies: true
           #   compile_obj: false
           - cpu: westmere
@@ -109,7 +110,7 @@ jobs:
             obj: bun-obj-darwin-x64-baseline
             runner: macos-11
             artifact: bun-obj-darwin-x64-baseline
-            webkit_url: "https://github.com/oven-sh/WebKit/releases/download/aug27-1/bun-webkit-macos-amd64-lto.tar.gz"
+            webkit_url: "https://github.com/oven-sh/WebKit/releases/download/oct8/bun-webkit-macos-amd64-lto.tar.gz"
             dependencies: false
             compile_obj: true
           # - cpu: haswell
@@ -118,7 +119,7 @@ jobs:
           #   obj: bun-obj-darwin-x64
           #   runner: macos-11
           #   artifact: bun-obj-darwin-x64
-          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/aug27-1/bun-webkit-macos-amd64-lto.tar.gz"
+          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/oct8/bun-webkit-macos-amd64-lto.tar.gz"
           #   dependencies: false
           #   compile_obj: true
           # - cpu: native
@@ -126,7 +127,7 @@ jobs:
           #   tag: bun-darwin-aarch64
           #   obj: bun-obj-darwin-aarch64
           #   artifact: bun-obj-darwin-aarch64
-          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/aug27-1/bun-webkit-macos-amd64-lto.tar.gz"
+          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/oct8/bun-webkit-macos-amd64-lto.tar.gz"
           #   runner: macos-arm64
           #   dependencies: true
           #   compile_obj: true
@@ -175,7 +176,7 @@ jobs:
           WEBKIT_RELEASE_DIR: ${{ runner.temp }}/bun-webkit
           WEBKIT_RELEASE_DIR_LTO: ${{ runner.temp }}/bun-webkit
         run: |
-          mkdir -p $BUN_DEPS_OUT_DIR
+          mkdir -p $OBJ_DIR $BUN_DEPS_OUT_DIR
           make vendor-without-check
       - name: Compile C++
         if: matrix.compile_obj
@@ -189,7 +190,7 @@ jobs:
           WEBKIT_RELEASE_DIR: ${{ runner.temp }}/bun-webkit
           WEBKIT_RELEASE_DIR_LTO: ${{ runner.temp }}/bun-webkit
         run: |
-          mkdir -p $OBJ_DIR
+          mkdir -p $OBJ_DIR $BUN_DEPS_OUT_DIR
           make -j $(sysctl -n hw.ncpu) release-bindings
       - name: Upload C++
         if: matrix.compile_obj
@@ -219,7 +220,7 @@ jobs:
             package: bun-darwin-x64
             runner: macos-11
             artifact: bun-obj-darwin-x64-baseline
-            webkit_url: "https://github.com/oven-sh/WebKit/releases/download/aug27-1/bun-webkit-macos-amd64-lto.tar.gz"
+            webkit_url: "https://github.com/oven-sh/WebKit/releases/download/oct8/bun-webkit-macos-amd64-lto.tar.gz"
           # - cpu: haswell
           #   arch: x86_64
           #   tag: bun-darwin-x64
@@ -227,14 +228,14 @@ jobs:
           #   package: bun-darwin-x64
           #   runner: macos-11
           #   artifact: bun-obj-darwin-x64
-          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/aug27-1/bun-webkit-macos-amd64-lto.tar.gz"
+          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/oct8/bun-webkit-macos-amd64-lto.tar.gz"
           # - cpu: native
           #   arch: aarch64
           #   tag: bun-darwin-aarch64
           #   obj: bun-obj-darwin-aarch64
           #   package: bun-darwin-aarch64
           #   artifact: bun-obj-darwin-aarch64
-          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/aug27-1/bun-webkit-macos-amd64-lto.tar.gz"
+          #   webkit_url: "https://github.com/oven-sh/WebKit/releases/download/oct8/bun-webkit-macos-amd64-lto.tar.gz"
           #   runner: macos-arm64
     steps:
       - uses: actions/checkout@v3
@@ -301,7 +302,7 @@ jobs:
           rm -rf packages/${{ matrix.package }}
           mkdir -p packages/${{ matrix.package }}
           mv ${{ runner.temp }}/release/* packages/${{ matrix.package }}/
-          make bun-link-lld-release copy-to-bun-release-dir-bin
+          make webcrypto bun-link-lld-release copy-to-bun-release-dir-bin
       - name: Zip
         env:
           CPU_TARGET: ${{ matrix.cpu }}

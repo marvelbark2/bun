@@ -138,6 +138,7 @@ public:
     WebCore::ScriptExecutionContext* scriptExecutionContext() const;
 
     void queueTask(WebCore::EventLoopTask* task);
+    void queueTaskConcurrently(WebCore::EventLoopTask* task);
 
     JSDOMStructureMap& structures() WTF_REQUIRES_LOCK(m_gcLock) { return m_structures; }
     JSDOMStructureMap& structures(NoLockingNecessaryTag) WTF_IGNORES_THREAD_SAFETY_ANALYSIS
@@ -177,6 +178,11 @@ public:
     JSC::Structure* FFIFunctionStructure() { return m_JSFFIFunctionStructure.getInitializedOnMainThread(this); }
     JSC::Structure* NapiClassStructure() { return m_NapiClassStructure.getInitializedOnMainThread(this); }
 
+    JSC::Structure* FileSinkStructure() { return m_JSFileSinkClassStructure.getInitializedOnMainThread(this); }
+    JSC::JSObject* FileSink() { return m_JSFileSinkClassStructure.constructorInitializedOnMainThread(this); }
+    JSC::JSValue FileSinkPrototype() { return m_JSFileSinkClassStructure.prototypeInitializedOnMainThread(this); }
+    JSC::JSValue JSReadableFileSinkControllerPrototype() { return m_JSFileSinkControllerPrototype.getInitializedOnMainThread(this); }
+
     JSC::Structure* ArrayBufferSinkStructure() { return m_JSArrayBufferSinkClassStructure.getInitializedOnMainThread(this); }
     JSC::JSObject* ArrayBufferSink() { return m_JSArrayBufferSinkClassStructure.constructorInitializedOnMainThread(this); }
     JSC::JSValue ArrayBufferSinkPrototype() { return m_JSArrayBufferSinkClassStructure.prototypeInitializedOnMainThread(this); }
@@ -204,6 +210,10 @@ public:
     JSC::JSObject* JSReadableState() { return m_JSReadableStateClassStructure.constructorInitializedOnMainThread(this); }
     JSC::JSValue JSReadableStatePrototype() { return m_JSReadableStateClassStructure.prototypeInitializedOnMainThread(this); }
 
+    JSC::Structure* OnigurumaRegExpStructure() { return m_OnigurumaRegExpClassStructure.getInitializedOnMainThread(this); }
+    JSC::JSValue OnigurumaRegExpPrototype() { return m_OnigurumaRegExpClassStructure.prototypeInitializedOnMainThread(this); }
+    JSC::JSObject* OnigurumaRegExpConstructor() { return m_OnigurumaRegExpClassStructure.constructorInitializedOnMainThread(this); }
+
     JSC::JSMap* readableStreamNativeMap() { return m_lazyReadableStreamPrototypeMap.getInitializedOnMainThread(this); }
     JSC::JSMap* requireMap() { return m_requireMap.getInitializedOnMainThread(this); }
     JSC::JSObject* encodeIntoObjectPrototype() { return m_encodeIntoObjectPrototype.getInitializedOnMainThread(this); }
@@ -229,6 +239,11 @@ public:
     void* bunVM() { return m_bunVM; }
     bool isThreadLocalDefaultGlobalObject = false;
 
+    JSObject* subtleCrypto()
+    {
+        return m_subtleCryptoObject.getInitializedOnMainThread(this);
+    }
+
     EncodedJSValue assignToStream(JSValue stream, JSValue controller);
 
     enum class PromiseFunctions : uint8_t {
@@ -251,8 +266,11 @@ public:
 
         jsFunctionOnLoadObjectResultResolve,
         jsFunctionOnLoadObjectResultReject,
+
+        Bun__TestScope__onReject,
+        Bun__TestScope__onResolve,
     };
-    static constexpr size_t promiseFunctionsSize = 18;
+    static constexpr size_t promiseFunctionsSize = 20;
 
     static PromiseFunctions promiseHandlerID(EncodedJSValue (*handler)(JSC__JSGlobalObject* arg0, JSC__CallFrame* arg1))
     {
@@ -296,6 +314,10 @@ public:
             return PromiseFunctions::jsFunctionOnLoadObjectResultResolve;
         } else if (handler == jsFunctionOnLoadObjectResultReject) {
             return PromiseFunctions::jsFunctionOnLoadObjectResultReject;
+        } else if (handler == Bun__TestScope__onReject) {
+            return PromiseFunctions::Bun__TestScope__onReject;
+        } else if (handler == Bun__TestScope__onResolve) {
+            return PromiseFunctions::Bun__TestScope__onResolve;
         } else {
             RELEASE_ASSERT_NOT_REACHED();
         }
@@ -330,6 +352,8 @@ public:
     mutable WriteBarrier<Unknown> m_JSFetchHeadersSetterValue;
     mutable WriteBarrier<Unknown> m_JSURLSearchParamsSetterValue;
 
+    JSObject* navigatorObject();
+
     void trackFFIFunction(JSC::JSFunction* function)
     {
         this->m_ffiFunctions.append(JSC::Strong<JSC::JSFunction> { vm(), function });
@@ -350,10 +374,16 @@ public:
     BunPlugin::OnResolve onResolvePlugins[BunPluginTargetMax + 1] {};
     BunPluginTarget defaultBunPluginTarget = BunPluginTargetBun;
 
+    void reload();
+
     JSC::Structure* pendingVirtualModuleResultStructure() { return m_pendingVirtualModuleResultStructure.get(this); }
 
     // When a napi module initializes on dlopen, we need to know what the value is
+    // This value is not observed by GC. It should be extremely ephemeral.
     JSValue pendingNapiModule = JSValue {};
+    // We need to know if the napi module registered itself or we registered it.
+    // To do that, we count the number of times we register a module.
+    int napiModuleRegisterCallCount = 0;
 
 #include "ZigGeneratedClasses+lazyStructureHeader.h"
 
@@ -374,18 +404,27 @@ private:
     LazyClassStructure m_JSArrayBufferSinkClassStructure;
     LazyClassStructure m_JSHTTPResponseSinkClassStructure;
     LazyClassStructure m_JSHTTPSResponseSinkClassStructure;
+    LazyClassStructure m_JSFileSinkClassStructure;
     LazyClassStructure m_JSBufferListClassStructure;
     LazyClassStructure m_JSStringDecoderClassStructure;
     LazyClassStructure m_JSReadableStateClassStructure;
+    LazyClassStructure m_OnigurumaRegExpClassStructure;
+
+    LazyProperty<JSGlobalObject, JSObject> m_navigatorObject;
 
     LazyProperty<JSGlobalObject, JSObject> m_JSArrayBufferControllerPrototype;
     LazyProperty<JSGlobalObject, JSObject> m_JSHTTPSResponseControllerPrototype;
+    LazyProperty<JSGlobalObject, JSObject> m_JSFileSinkControllerPrototype;
+
     LazyProperty<JSGlobalObject, Structure> m_JSHTTPResponseController;
+
     LazyProperty<JSGlobalObject, JSObject> m_processObject;
     LazyProperty<JSGlobalObject, JSObject> m_processEnvObject;
     LazyProperty<JSGlobalObject, JSMap> m_lazyReadableStreamPrototypeMap;
     LazyProperty<JSGlobalObject, JSMap> m_requireMap;
     LazyProperty<JSGlobalObject, JSObject> m_performanceObject;
+
+    LazyProperty<JSGlobalObject, JSObject> m_subtleCryptoObject;
 
     LazyProperty<JSGlobalObject, JSC::Structure> m_pendingVirtualModuleResultStructure;
 

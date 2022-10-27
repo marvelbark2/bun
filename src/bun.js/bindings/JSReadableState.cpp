@@ -19,16 +19,18 @@ int64_t getHighWaterMark(JSC::VM& vm, JSC::JSGlobalObject* globalObject, bool is
 {
     auto throwScope = DECLARE_THROW_SCOPE(vm);
 
-    JSC::JSValue highWaterMarkVal = options->getDirect(vm, JSC::Identifier::fromString(vm, "highWaterMark"_s));
-    if (isDuplex && (highWaterMarkVal.isUndefined() || highWaterMarkVal.isNull())) {
-        highWaterMarkVal = options->getDirect(vm, JSC::Identifier::fromString(vm, "readableObjectMode"_s));
-    }
-    if (!highWaterMarkVal.isNull() && !highWaterMarkVal.isUndefined()) {
-        double customHightWaterMark = highWaterMarkVal.toNumber(globalObject);
-        RETURN_IF_EXCEPTION(throwScope, -1);
-        if (customHightWaterMark < 0)
-          return -1;
-        return floor(customHightWaterMark);
+    // We must use getIfPropertyExists because:
+    // - it might be a getter
+    // - it might be from a super class
+    auto* clientData = WebCore::clientData(vm);
+    if (JSValue highWaterMarkVal = options->getIfPropertyExists(globalObject, clientData->builtinNames().highWaterMarkPublicName())) {
+        if (isDuplex && (highWaterMarkVal.isUndefined() || highWaterMarkVal.isNull())) {
+            highWaterMarkVal = options->getDirect(vm, JSC::Identifier::fromString(vm, "readableObjectMode"_s));
+        }
+
+        if (!highWaterMarkVal.isUndefinedOrNull()) {
+            return highWaterMarkVal.toInt32(globalObject);
+        }
     }
 
     return -1;
@@ -38,77 +40,72 @@ void JSReadableState::finishCreation(JSC::VM& vm, JSC::JSGlobalObject* globalObj
 {
     Base::finishCreation(vm);
 
-    bool objectMode = false;
-    auto objectModeIdent = JSC::Identifier::fromString(vm, "objectMode"_s);
     if (options != nullptr) {
-        JSC::JSValue objectModeVal = options->getDirect(vm, objectModeIdent);
+        JSC::JSValue objectModeVal = options->getDirect(vm, JSC::Identifier::fromString(vm, "objectMode"_s));
         if (isDuplex && !objectModeVal) {
             objectModeVal = options->getDirect(vm, JSC::Identifier::fromString(vm, "readableObjectMode"_s));
         }
-        if (objectModeVal)
-            objectMode = objectModeVal.toBoolean(globalObject);
+        if (objectModeVal && objectModeVal.toBoolean(globalObject))
+            setBool(JSReadableState::Mask::objectMode, true);
     }
-    putDirect(vm, WTFMove(objectModeIdent), JSC::jsBoolean(objectMode));
 
-    m_highWaterMark = objectMode ? 16 : 16 * 1024;  // default value
+    m_highWaterMark = getBool(
+                          JSReadableState::Mask::objectMode)
+        ? 16
+        : 16 * 1024; // default value
+
     if (options != nullptr) {
         int64_t customHightWaterMark = getHighWaterMark(vm, globalObject, isDuplex, options);
         if (customHightWaterMark >= 0)
             m_highWaterMark = customHightWaterMark;
     }
 
-    putDirect(vm, JSC::Identifier::fromString(vm, "buffer"_s), JSBufferList::create(
-        vm, globalObject, reinterpret_cast<Zig::GlobalObject*>(globalObject)->JSBufferListStructure()));
-    putDirect(vm, JSC::Identifier::fromString(vm, "pipes"_s), JSC::constructEmptyArray(globalObject, nullptr, 0));
+    m_buffer.set(vm, this, JSBufferList::create(vm, globalObject, reinterpret_cast<Zig::GlobalObject*>(globalObject)->JSBufferListStructure()));
+    m_pipes.set(vm, this, JSC::constructEmptyArray(globalObject, nullptr, 0));
 
-    if (options == nullptr) {
-        m_emitClose = false;
-        m_autoDestroy = false;
-    } else {
+    if (options != nullptr) {
         JSC::JSValue emitCloseVal = options->getDirect(vm, JSC::Identifier::fromString(vm, "emitClose"_s));
-        m_emitClose = !emitCloseVal.isBoolean() || emitCloseVal.toBoolean(globalObject);
+        if (!emitCloseVal.isBoolean() || emitCloseVal.toBoolean(globalObject))
+            setBool(JSReadableState::Mask::emitClose, true);
         // Has it been destroyed.
         JSC::JSValue autoDestroyVal = options->getDirect(vm, JSC::Identifier::fromString(vm, "autoDestroy"_s));
-        m_autoDestroy = !autoDestroyVal.isBoolean() || autoDestroyVal.toBoolean(globalObject);
+        if (!autoDestroyVal.isBoolean() || autoDestroyVal.toBoolean(globalObject))
+            setBool(JSReadableState::Mask::autoDestroy, true);
     }
 
     // Indicates whether the stream has finished destroying.
-    putDirect(vm, JSC::Identifier::fromString(vm, "errored"_s), JSC::jsNull());
+    m_errored.set(vm, this, JSC::jsNull());
 
     // Ref the piped dest which we need a drain event on it
     // type: null | Writable | Set<Writable>.
-    auto defaultEncodingIdent = JSC::Identifier::fromString(vm, "defaultEncoding"_s);
     if (options == nullptr) {
-        putDirect(vm, WTFMove(defaultEncodingIdent), JSC::jsString(vm, WTF::String("utf8"_s)));
+        m_defaultEncoding.set(vm, this, JSC::jsString(vm, WTF::String("utf8"_s)));
     } else {
-        JSC::JSValue defaultEncodingVal = getDirect(vm, defaultEncodingIdent);
-        if (defaultEncodingVal) {
-            putDirect(vm, WTFMove(defaultEncodingIdent), defaultEncodingVal);
+        if (JSC::JSValue defaultEncodingVal = getIfPropertyExists(globalObject, PropertyName(JSC::Identifier::fromString(vm, "defaultEncoding"_s)))) {
+            m_defaultEncoding.set(vm, this, defaultEncodingVal);
         } else {
-            putDirect(vm, WTFMove(defaultEncodingIdent), JSC::jsString(vm, WTF::String("utf8"_s)));
+            m_defaultEncoding.set(vm, this, JSC::jsString(vm, WTF::String("utf8"_s)));
         }
     }
 
-    putDirect(vm, JSC::Identifier::fromString(vm, "awaitDrainWriters"_s), JSC::jsNull());
+    m_awaitDrainWriters.set(vm, this, JSC::jsNull());
 
-    auto decoderIdent = JSC::Identifier::fromString(vm, "decoder"_s);
-    auto encodingIdent = JSC::Identifier::fromString(vm, "encoding"_s);
     if (options == nullptr) {
-        putDirect(vm, WTFMove(decoderIdent), JSC::jsNull());
-        putDirect(vm, WTFMove(encodingIdent), JSC::jsNull());
+        m_decoder.set(vm, this, JSC::jsNull());
+        m_encoding.set(vm, this, JSC::jsNull());
     } else {
-        JSC::JSValue encodingVal = options->getDirect(vm, encodingIdent);
-        if (encodingVal) {
+        JSC::JSValue encodingVal = options->getDirect(vm, JSC::Identifier::fromString(vm, "encoding"_s));
+        if (encodingVal && encodingVal.isString()) {
             auto constructor = reinterpret_cast<Zig::GlobalObject*>(globalObject)->JSStringDecoder();
             auto constructData = JSC::getConstructData(constructor);
             MarkedArgumentBuffer args;
             args.append(encodingVal);
             JSObject* decoder = JSC::construct(globalObject, constructor, constructData, args);
-            putDirect(vm, WTFMove(decoderIdent), decoder);
-            putDirect(vm, WTFMove(encodingIdent), encodingVal);
+            m_decoder.set(vm, this, decoder);
+            m_encoding.set(vm, this, encodingVal);
         } else {
-            putDirect(vm, WTFMove(decoderIdent), JSC::jsNull());
-            putDirect(vm, WTFMove(encodingIdent), JSC::jsNull());
+            m_decoder.set(vm, this, JSC::jsNull());
+            m_encoding.set(vm, this, JSC::jsNull());
         }
     }
 }
@@ -125,129 +122,202 @@ JSC::GCClient::IsoSubspace* JSReadableState::subspaceForImpl(JSC::VM& vm)
         [](auto& spaces, auto&& space) { spaces.m_subspaceForReadableState = WTFMove(space); });
 }
 
+template<typename Visitor>
+void JSReadableState::visitChildrenImpl(JSCell* cell, Visitor& visitor)
+{
+    JSReadableState* state = jsCast<JSReadableState*>(cell);
+    ASSERT_GC_OBJECT_INHERITS(state, info());
+    Base::visitChildren(state, visitor);
+    visitor.append(state->m_buffer);
+    visitor.append(state->m_pipes);
+    visitor.append(state->m_errored);
+    visitor.append(state->m_defaultEncoding);
+    visitor.append(state->m_awaitDrainWriters);
+    visitor.append(state->m_decoder);
+    visitor.append(state->m_encoding);
+}
+DEFINE_VISIT_CHILDREN(JSReadableState);
+
 STATIC_ASSERT_ISO_SUBSPACE_SHARABLE(JSReadableStatePrototype, JSReadableStatePrototype::Base);
 
 JSC_DEFINE_CUSTOM_GETTER(jsReadableState_pipesCount, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, PropertyName attributeName))
 {
     auto& vm = JSC::getVM(lexicalGlobalObject);
     auto throwScope = DECLARE_THROW_SCOPE(vm);
-    JSObject* thisObject = JSC::jsDynamicCast<JSObject*>(JSValue::decode(thisValue));
-    if (!thisObject) {
+    JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));
+    if (!state) {
         RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined()));
     }
-    JSC::JSValue pipesVal = thisObject->getDirect(vm, JSC::Identifier::fromString(vm, "pipes"_s));
-    if (!pipesVal) {
-        RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined()));
-    }
-    JSArray* pipes = JSC::jsDynamicCast<JSArray*>(pipesVal);
+    JSArray* pipes = JSC::jsDynamicCast<JSArray*>(state->m_pipes.get());
     if (!pipes) {
         RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined()));
     }
     RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(JSC::jsNumber(pipes->length())));
 }
 
-#define JSReadableState_NULLABLE_BOOLEAN_GETTER_SETTER(NAME) \
-    static JSC_DECLARE_CUSTOM_GETTER(jsReadableState_##NAME); \
-    JSC_DEFINE_CUSTOM_GETTER(jsReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, PropertyName attributeName)) \
-    { \
-        auto& vm = JSC::getVM(lexicalGlobalObject); \
-        auto throwScope = DECLARE_THROW_SCOPE(vm); \
-        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue)); \
-        if (!state) { \
-            RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined())); \
-        } \
-        if (state->m_##NAME == 0) \
-            RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(JSC::jsNull())); \
-        RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(JSC::jsBoolean(state->m_##NAME > 0))); \
-    } \
-    static JSC_DECLARE_CUSTOM_SETTER(setJSReadableState_##NAME); \
+#define JSReadableState_NULLABLE_BOOLEAN_GETTER_SETTER(NAME)                                                                                                                       \
+    static JSC_DECLARE_CUSTOM_GETTER(jsReadableState_##NAME);                                                                                                                      \
+    JSC_DEFINE_CUSTOM_GETTER(jsReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, PropertyName attributeName))                                 \
+    {                                                                                                                                                                              \
+        auto& vm = JSC::getVM(lexicalGlobalObject);                                                                                                                                \
+        auto throwScope = DECLARE_THROW_SCOPE(vm);                                                                                                                                 \
+        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));                                                                                 \
+        if (!state) {                                                                                                                                                              \
+            RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined()));                                                                                             \
+        }                                                                                                                                                                          \
+        if (state->m_##NAME == 0)                                                                                                                                                  \
+            RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(JSC::jsNull()));                                                                                                   \
+        RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(JSC::jsBoolean(state->m_##NAME > 0)));                                                                                 \
+    }                                                                                                                                                                              \
+    static JSC_DECLARE_CUSTOM_SETTER(setJSReadableState_##NAME);                                                                                                                   \
     JSC_DEFINE_CUSTOM_SETTER(setJSReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue, PropertyName attributeName)) \
-    { \
-        auto& vm = JSC::getVM(lexicalGlobalObject); \
-        auto throwScope = DECLARE_THROW_SCOPE(vm); \
-        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue)); \
-        if (!state) { \
-            RETURN_IF_EXCEPTION(throwScope, false); \
-        } \
-        auto value = JSC::JSValue::decode(encodedValue); \
-        state->m_##NAME = value.isNull() ? 0 : value.toBoolean(lexicalGlobalObject) ? 1 : -1; \
-        RELEASE_AND_RETURN(throwScope, true); \
+    {                                                                                                                                                                              \
+        auto& vm = JSC::getVM(lexicalGlobalObject);                                                                                                                                \
+        auto throwScope = DECLARE_THROW_SCOPE(vm);                                                                                                                                 \
+        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));                                                                                 \
+        if (!state) {                                                                                                                                                              \
+            RETURN_IF_EXCEPTION(throwScope, false);                                                                                                                                \
+        }                                                                                                                                                                          \
+        auto value = JSC::JSValue::decode(encodedValue);                                                                                                                           \
+        state->m_##NAME = value.isNull() ? 0 : value.toBoolean(lexicalGlobalObject) ? 1                                                                                            \
+                                                                                    : -1;                                                                                          \
+        RELEASE_AND_RETURN(throwScope, true);                                                                                                                                      \
     }
 
 JSReadableState_NULLABLE_BOOLEAN_GETTER_SETTER(paused)
-JSReadableState_NULLABLE_BOOLEAN_GETTER_SETTER(flowing)
+    JSReadableState_NULLABLE_BOOLEAN_GETTER_SETTER(flowing)
 
 #undef JSReadableState_NULLABLE_BOOLEAN_GETTER_SETTER
 
-#define JSReadableState_GETTER_SETTER(NAME, TYPE)                                                                                      \
-    static JSC_DECLARE_CUSTOM_GETTER(jsReadableState_##NAME); \
-    JSC_DEFINE_CUSTOM_GETTER(jsReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, PropertyName attributeName)) \
-    {                                                                                                                                              \
-        auto& vm = JSC::getVM(lexicalGlobalObject); \
-        auto throwScope = DECLARE_THROW_SCOPE(vm); \
-        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue)); \
-        if (!state) { \
-            RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined())); \
-        } \
-        RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(JSC::js##TYPE(state->m_##NAME))); \
-    } \
-    \
-    static JSC_DECLARE_CUSTOM_SETTER(setJSReadableState_##NAME); \
+#define JSReadableState_NUMBER_GETTER_SETTER(NAME)                                                                                                                                 \
+    static JSC_DECLARE_CUSTOM_GETTER(jsReadableState_##NAME);                                                                                                                      \
+    JSC_DEFINE_CUSTOM_GETTER(jsReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, PropertyName attributeName))                                 \
+    {                                                                                                                                                                              \
+        auto& vm = JSC::getVM(lexicalGlobalObject);                                                                                                                                \
+        auto throwScope = DECLARE_THROW_SCOPE(vm);                                                                                                                                 \
+        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));                                                                                 \
+        if (!state) {                                                                                                                                                              \
+            RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined()));                                                                                             \
+        }                                                                                                                                                                          \
+        RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(JSC::jsNumber(state->m_##NAME)));                                                                                      \
+    }                                                                                                                                                                              \
+                                                                                                                                                                                   \
+    static JSC_DECLARE_CUSTOM_SETTER(setJSReadableState_##NAME);                                                                                                                   \
     JSC_DEFINE_CUSTOM_SETTER(setJSReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue, PropertyName attributeName)) \
-    { \
-        auto& vm = JSC::getVM(lexicalGlobalObject); \
-        auto throwScope = DECLARE_THROW_SCOPE(vm); \
-        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue)); \
-        if (!state) { \
-            RETURN_IF_EXCEPTION(throwScope, false); \
-        } \
-        state->m_##NAME = JSC::JSValue::decode(encodedValue).to##TYPE(lexicalGlobalObject); \
-        RETURN_IF_EXCEPTION(throwScope, false); \
-        RELEASE_AND_RETURN(throwScope, true); \
+    {                                                                                                                                                                              \
+        auto& vm = JSC::getVM(lexicalGlobalObject);                                                                                                                                \
+        auto throwScope = DECLARE_THROW_SCOPE(vm);                                                                                                                                 \
+        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));                                                                                 \
+        if (!state) {                                                                                                                                                              \
+            RETURN_IF_EXCEPTION(throwScope, false);                                                                                                                                \
+        }                                                                                                                                                                          \
+        state->m_##NAME = JSC::JSValue::decode(encodedValue).toNumber(lexicalGlobalObject);                                                                                        \
+        RETURN_IF_EXCEPTION(throwScope, false);                                                                                                                                    \
+        RELEASE_AND_RETURN(throwScope, true);                                                                                                                                      \
     }
 
-#define JSReadableState_BOOLEAN_GETTER_SETTER(NAME)       \
-    JSReadableState_GETTER_SETTER(NAME, Boolean)
-
-#define JSReadableState_NUMBER_GETTER_SETTER(NAME)        \
-    JSReadableState_GETTER_SETTER(NAME, Number)
-
-JSReadableState_BOOLEAN_GETTER_SETTER(ended)
-JSReadableState_BOOLEAN_GETTER_SETTER(endEmitted)
-JSReadableState_BOOLEAN_GETTER_SETTER(reading)
-JSReadableState_BOOLEAN_GETTER_SETTER(constructed)
-JSReadableState_BOOLEAN_GETTER_SETTER(sync)
-JSReadableState_BOOLEAN_GETTER_SETTER(needReadable)
-JSReadableState_BOOLEAN_GETTER_SETTER(emittedReadable)
-JSReadableState_BOOLEAN_GETTER_SETTER(readableListening)
-JSReadableState_BOOLEAN_GETTER_SETTER(resumeScheduled)
-JSReadableState_BOOLEAN_GETTER_SETTER(errorEmitted)
-JSReadableState_BOOLEAN_GETTER_SETTER(emitClose)
-JSReadableState_BOOLEAN_GETTER_SETTER(autoDestroy)
-JSReadableState_BOOLEAN_GETTER_SETTER(destroyed)
-JSReadableState_BOOLEAN_GETTER_SETTER(closed)
-JSReadableState_BOOLEAN_GETTER_SETTER(closeEmitted)
-JSReadableState_BOOLEAN_GETTER_SETTER(multiAwaitDrain)
-JSReadableState_BOOLEAN_GETTER_SETTER(readingMore)
-JSReadableState_BOOLEAN_GETTER_SETTER(dataEmitted)
-
-JSReadableState_NUMBER_GETTER_SETTER(length)
-JSReadableState_NUMBER_GETTER_SETTER(highWaterMark)
+        JSReadableState_NUMBER_GETTER_SETTER(length)
+            JSReadableState_NUMBER_GETTER_SETTER(highWaterMark)
 
 #undef JSReadableState_NUMBER_GETTER_SETTER
+
+#define JSReadableState_BOOLEAN_GETTER_SETTER(NAME)                                                                                                                                \
+    static JSC_DECLARE_CUSTOM_GETTER(jsReadableState_##NAME);                                                                                                                      \
+    JSC_DEFINE_CUSTOM_GETTER(jsReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, PropertyName attributeName))                                 \
+    {                                                                                                                                                                              \
+        auto& vm = JSC::getVM(lexicalGlobalObject);                                                                                                                                \
+        auto throwScope = DECLARE_THROW_SCOPE(vm);                                                                                                                                 \
+        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));                                                                                 \
+        if (!state) {                                                                                                                                                              \
+            RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined()));                                                                                             \
+        }                                                                                                                                                                          \
+        RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(JSC::jsBoolean(state->getBool(JSReadableState::Mask::NAME))));                                                         \
+    }                                                                                                                                                                              \
+                                                                                                                                                                                   \
+    static JSC_DECLARE_CUSTOM_SETTER(setJSReadableState_##NAME);                                                                                                                   \
+    JSC_DEFINE_CUSTOM_SETTER(setJSReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue, PropertyName attributeName)) \
+    {                                                                                                                                                                              \
+        auto& vm = JSC::getVM(lexicalGlobalObject);                                                                                                                                \
+        auto throwScope = DECLARE_THROW_SCOPE(vm);                                                                                                                                 \
+        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));                                                                                 \
+        if (!state) {                                                                                                                                                              \
+            RETURN_IF_EXCEPTION(throwScope, false);                                                                                                                                \
+        }                                                                                                                                                                          \
+        state->setBool(JSReadableState::Mask::NAME, JSC::JSValue::decode(encodedValue).toBoolean(lexicalGlobalObject));                                                            \
+        RELEASE_AND_RETURN(throwScope, true);                                                                                                                                      \
+    }
+
+                JSReadableState_BOOLEAN_GETTER_SETTER(objectMode)
+                    JSReadableState_BOOLEAN_GETTER_SETTER(ended)
+                        JSReadableState_BOOLEAN_GETTER_SETTER(endEmitted)
+                            JSReadableState_BOOLEAN_GETTER_SETTER(reading)
+                                JSReadableState_BOOLEAN_GETTER_SETTER(constructed)
+                                    JSReadableState_BOOLEAN_GETTER_SETTER(sync)
+                                        JSReadableState_BOOLEAN_GETTER_SETTER(needReadable)
+                                            JSReadableState_BOOLEAN_GETTER_SETTER(emittedReadable)
+                                                JSReadableState_BOOLEAN_GETTER_SETTER(readableListening)
+                                                    JSReadableState_BOOLEAN_GETTER_SETTER(resumeScheduled)
+                                                        JSReadableState_BOOLEAN_GETTER_SETTER(errorEmitted)
+                                                            JSReadableState_BOOLEAN_GETTER_SETTER(emitClose)
+                                                                JSReadableState_BOOLEAN_GETTER_SETTER(autoDestroy)
+                                                                    JSReadableState_BOOLEAN_GETTER_SETTER(destroyed)
+                                                                        JSReadableState_BOOLEAN_GETTER_SETTER(closed)
+                                                                            JSReadableState_BOOLEAN_GETTER_SETTER(closeEmitted)
+                                                                                JSReadableState_BOOLEAN_GETTER_SETTER(multiAwaitDrain)
+                                                                                    JSReadableState_BOOLEAN_GETTER_SETTER(readingMore)
+                                                                                        JSReadableState_BOOLEAN_GETTER_SETTER(dataEmitted)
+
 #undef JSReadableState_BOOLEAN_GETTER_SETTER
-#undef JSReadableState_GETTER_SETTER
 
-#define JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(NAME) \
-    { #NAME ""_s, static_cast<unsigned>(JSC::PropertyAttribute::DontDelete | JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { HashTableValue::GetterSetterType, jsReadableState_##NAME, setJSReadableState_##NAME } }
+#define JSReadableState_JSVALUE_GETTER_SETTER(NAME)                                                                                                                                \
+    static JSC_DECLARE_CUSTOM_GETTER(jsReadableState_##NAME);                                                                                                                      \
+    JSC_DEFINE_CUSTOM_GETTER(jsReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, PropertyName attributeName))                                 \
+    {                                                                                                                                                                              \
+        auto& vm = JSC::getVM(lexicalGlobalObject);                                                                                                                                \
+        auto throwScope = DECLARE_THROW_SCOPE(vm);                                                                                                                                 \
+        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));                                                                                 \
+        if (!state) {                                                                                                                                                              \
+            RETURN_IF_EXCEPTION(throwScope, JSC::JSValue::encode(JSC::jsUndefined()));                                                                                             \
+        }                                                                                                                                                                          \
+        RELEASE_AND_RETURN(throwScope, JSC::JSValue::encode(state->m_##NAME.get()));                                                                                               \
+    }                                                                                                                                                                              \
+    static JSC_DECLARE_CUSTOM_SETTER(setJSReadableState_##NAME);                                                                                                                   \
+    JSC_DEFINE_CUSTOM_SETTER(setJSReadableState_##NAME, (JSGlobalObject * lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue, PropertyName attributeName)) \
+    {                                                                                                                                                                              \
+        auto& vm = JSC::getVM(lexicalGlobalObject);                                                                                                                                \
+        auto throwScope = DECLARE_THROW_SCOPE(vm);                                                                                                                                 \
+        JSReadableState* state = JSC::jsDynamicCast<JSReadableState*>(JSValue::decode(thisValue));                                                                                 \
+        if (!state) {                                                                                                                                                              \
+            RETURN_IF_EXCEPTION(throwScope, false);                                                                                                                                \
+        }                                                                                                                                                                          \
+        auto value = JSC::JSValue::decode(encodedValue);                                                                                                                           \
+        state->m_##NAME.set(vm, state, value);                                                                                                                                     \
+        RELEASE_AND_RETURN(throwScope, true);                                                                                                                                      \
+    }
 
-/* Hash table for prototype */
-static const HashTableValue JSReadableStatePrototypeTableValues[]
+                                                                                            JSReadableState_JSVALUE_GETTER_SETTER(buffer)
+                                                                                                JSReadableState_JSVALUE_GETTER_SETTER(pipes)
+                                                                                                    JSReadableState_JSVALUE_GETTER_SETTER(errored)
+                                                                                                        JSReadableState_JSVALUE_GETTER_SETTER(defaultEncoding)
+                                                                                                            JSReadableState_JSVALUE_GETTER_SETTER(awaitDrainWriters)
+                                                                                                                JSReadableState_JSVALUE_GETTER_SETTER(decoder)
+                                                                                                                    JSReadableState_JSVALUE_GETTER_SETTER(encoding)
+
+#undef JSReadableState_JSVALUE_GETTER_SETTER
+
+#define JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(NAME)                                                                                                                                                                                                          \
+    {                                                                                                                                                                                                                                                                 \
+#NAME ""_s, static_cast < unsigned>(JSC::PropertyAttribute::DontDelete | JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { HashTableValue::GetterSetterType, jsReadableState_##NAME, setJSReadableState_##NAME } \
+    }
+
+    /* Hash table for prototype */
+    static const HashTableValue JSReadableStatePrototypeTableValues[]
     = {
           { "pipesCount"_s, static_cast<unsigned>(JSC::PropertyAttribute::DontDelete | JSC::PropertyAttribute::ReadOnly | JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { HashTableValue::GetterSetterType, jsReadableState_pipesCount, 0 } },
           JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(paused),
           JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(flowing),
-          
+
+          JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(objectMode),
           JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(ended),
           JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(endEmitted),
           JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(reading),
@@ -269,6 +339,14 @@ static const HashTableValue JSReadableStatePrototypeTableValues[]
 
           JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(length),
           JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(highWaterMark),
+
+          JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(buffer),
+          JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(pipes),
+          JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(errored),
+          JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(defaultEncoding),
+          JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(awaitDrainWriters),
+          JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(decoder),
+          JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE(encoding),
       };
 
 #undef JSReadableState_GETTER_SETTER_HASH_TABLE_VALUE
@@ -289,7 +367,8 @@ void JSReadableStateConstructor::finishCreation(VM& vm, JSC::JSGlobalObject* glo
     ASSERT(inherits(info()));
 }
 
-JSReadableStateConstructor* JSReadableStateConstructor::create(JSC::VM& vm, JSC::JSGlobalObject* globalObject, JSC::Structure* structure, JSReadableStatePrototype* prototype) {
+JSReadableStateConstructor* JSReadableStateConstructor::create(JSC::VM& vm, JSC::JSGlobalObject* globalObject, JSC::Structure* structure, JSReadableStatePrototype* prototype)
+{
     JSReadableStateConstructor* ptr = new (NotNull, JSC::allocateCell<JSReadableStateConstructor>(vm)) JSReadableStateConstructor(vm, structure, construct);
     ptr->finishCreation(vm, globalObject, prototype);
     return ptr;

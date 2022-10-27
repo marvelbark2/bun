@@ -770,9 +770,48 @@ const Arguments = struct {
     pub const RmDir = struct {
         path: PathLike,
 
+        force: bool = false,
+
         max_retries: u32 = 0,
         recursive: bool = false,
         retry_delay: c_uint = 100,
+
+        pub fn fromJS(ctx: JSC.C.JSContextRef, arguments: *ArgumentsSlice, exception: JSC.C.ExceptionRef) ?RmDir {
+            const path = PathLike.fromJS(ctx, arguments, exception) orelse {
+                if (exception.* == null) {
+                    JSC.throwInvalidArguments(
+                        "path must be a string or TypedArray",
+                        .{},
+                        ctx,
+                        exception,
+                    );
+                }
+                return null;
+            };
+
+            if (exception.* != null) return null;
+            var recursive = false;
+            var force = false;
+            if (arguments.next()) |val| {
+                arguments.eat();
+
+                if (val.isObject()) {
+                    if (val.get(ctx.ptr(), "recursive")) |boolean| {
+                        recursive = boolean.toBoolean();
+                    }
+
+                    if (val.get(ctx.ptr(), "force")) |boolean| {
+                        force = boolean.toBoolean();
+                    }
+                }
+            }
+
+            return RmDir{
+                .path = path,
+                .recursive = recursive,
+                .force = force,
+            };
+        }
     };
 
     /// https://github.com/nodejs/node/blob/master/lib/fs.js#L1285
@@ -3334,11 +3373,14 @@ pub const NodeFS = struct {
                     .result => |stat_| stat_,
                 };
 
+                // For certain files, the size might be 0 but the file might still have contents.
                 const size = @intCast(u64, @maximum(stat_.size, 0));
+
                 var buf = std.ArrayList(u8).init(bun.default_allocator);
                 buf.ensureTotalCapacityPrecise(size + 16) catch unreachable;
                 buf.expandToCapacity();
                 var total: usize = 0;
+
                 while (total < size) {
                     switch (Syscall.read(fd, buf.items.ptr[total..buf.capacity])) {
                         .err => |err| return .{
@@ -3358,8 +3400,47 @@ pub const NodeFS = struct {
                             }
                         },
                     }
+                } else {
+                    // https://github.com/oven-sh/bun/issues/1220
+                    while (true) {
+                        switch (Syscall.read(fd, buf.items.ptr[total..buf.capacity])) {
+                            .err => |err| return .{
+                                .err = err,
+                            },
+                            .result => |amt| {
+                                total += amt;
+                                // There are cases where stat()'s size is wrong or out of date
+                                if (total > size and amt != 0) {
+                                    buf.ensureUnusedCapacity(8096) catch unreachable;
+                                    buf.expandToCapacity();
+                                    continue;
+                                }
+
+                                if (amt == 0) {
+                                    break;
+                                }
+                            },
+                        }
+                    }
                 }
+
                 buf.items.len = total;
+                if (total == 0) {
+                    buf.deinit();
+                    return switch (args.encoding) {
+                        .buffer => .{
+                            .result = .{
+                                .buffer = Buffer.empty,
+                            },
+                        },
+                        else => .{
+                            .result = .{
+                                .string = "",
+                            },
+                        },
+                    };
+                }
+
                 return switch (args.encoding) {
                     .buffer => .{
                         .result = .{
@@ -3559,7 +3640,10 @@ pub const NodeFS = struct {
         switch (comptime flavor) {
             .sync => {
                 var dir = args.old_path.sliceZ(&this.sync_error_buf);
-                _ = dir;
+                switch (Syscall.getErrno(system.rmdir(dir))) {
+                    .SUCCESS => return Maybe(Return.Rmdir).success,
+                    else => |err| return Maybe(Return.Rmdir).errnoSys(err, .rmdir),
+                }
             },
             else => {},
         }
@@ -3572,6 +3656,166 @@ pub const NodeFS = struct {
         _ = args;
         _ = this;
         _ = flavor;
+        switch (comptime flavor) {
+            .sync => {
+                if (comptime Environment.isMac) {
+                    var dest = args.path.sliceZ(&this.sync_error_buf);
+
+                    while (true) {
+                        var flags: u32 = 0;
+                        if (args.recursive) {
+                            flags |= bun.C.darwin.RemoveFileFlags.cross_mount;
+                            flags |= bun.C.darwin.RemoveFileFlags.allow_long_paths;
+                            flags |= bun.C.darwin.RemoveFileFlags.recursive;
+                        }
+
+                        if (Maybe(Return.Rm).errnoSys(bun.C.darwin.removefileat(std.os.AT.FDCWD, dest, null, flags), .unlink)) |errno| {
+                            switch (@intToEnum(os.E, errno.err.errno)) {
+                                .AGAIN, .INTR => continue,
+                                .NOENT => {
+                                    if (args.force) {
+                                        return Maybe(Return.Rm).success;
+                                    }
+
+                                    return errno;
+                                },
+
+                                .MLINK => {
+                                    var copy: [bun.MAX_PATH_BYTES]u8 = undefined;
+                                    @memcpy(&copy, dest.ptr, dest.len);
+                                    copy[dest.len] = 0;
+                                    var dest_copy = copy[0..dest.len :0];
+                                    switch (Syscall.unlink(dest_copy).getErrno()) {
+                                        .AGAIN, .INTR => continue,
+                                        .NOENT => {
+                                            if (args.force) {
+                                                continue;
+                                            }
+
+                                            return errno;
+                                        },
+                                        .SUCCESS => continue,
+                                        else => return errno,
+                                    }
+                                },
+                                .SUCCESS => unreachable,
+                                else => return errno,
+                            }
+                        }
+
+                        return Maybe(Return.Rm).success;
+                    }
+                } else if (comptime Environment.isLinux) {
+                    if (args.recursive) {
+                        std.fs.cwd().deleteTree(args.path.slice()) catch |err| {
+                            const errno: std.os.E = switch (err) {
+                                error.InvalidHandle => .BADF,
+                                error.AccessDenied => .PERM,
+                                error.FileTooBig => .FBIG,
+                                error.SymLinkLoop => .LOOP,
+                                error.ProcessFdQuotaExceeded => .NFILE,
+                                error.NameTooLong => .NAMETOOLONG,
+                                error.SystemFdQuotaExceeded => .MFILE,
+                                error.SystemResources => .NOMEM,
+                                error.ReadOnlyFileSystem => .ROFS,
+                                error.FileSystem => .IO,
+                                error.FileBusy => .BUSY,
+                                error.DeviceBusy => .BUSY,
+
+                                // One of the path components was not a directory.
+                                // This error is unreachable if `sub_path` does not contain a path separator.
+                                error.NotDir => .NOTDIR,
+                                // On Windows, file paths must be valid Unicode.
+                                error.InvalidUtf8 => .INVAL,
+
+                                // On Windows, file paths cannot contain these characters:
+                                // '/', '*', '?', '"', '<', '>', '|'
+                                error.BadPathName => .INVAL,
+
+                                else => .FAULT,
+                            };
+                            if (args.force) {
+                                return Maybe(Return.Rm).success;
+                            }
+                            return Maybe(Return.Rm){
+                                .err = JSC.Node.Syscall.Error.fromCode(errno, .unlink),
+                            };
+                        };
+                        return Maybe(Return.Rm).success;
+                    }
+                }
+
+                {
+                    var dest = args.path.sliceZ(&this.sync_error_buf);
+                    std.os.unlinkZ(dest) catch |er| {
+                        // empircally, it seems to return AccessDenied when the
+                        // file is actually a directory on macOS.
+                        if (er == error.IsDir or
+                            er == error.NotDir or
+                            er == error.AccessDenied)
+                        {
+                            std.os.rmdirZ(dest) catch |err| {
+                                if (args.force) {
+                                    return Maybe(Return.Rm).success;
+                                }
+
+                                const code: std.os.E = switch (err) {
+                                    error.AccessDenied => .PERM,
+                                    error.SymLinkLoop => .LOOP,
+                                    error.NameTooLong => .NAMETOOLONG,
+                                    error.SystemResources => .NOMEM,
+                                    error.ReadOnlyFileSystem => .ROFS,
+                                    error.FileBusy => .BUSY,
+                                    error.FileNotFound => .NOENT,
+                                    error.InvalidUtf8 => .INVAL,
+                                    error.BadPathName => .INVAL,
+                                    else => .FAULT,
+                                };
+
+                                return .{
+                                    .err = JSC.Node.Syscall.Error.fromCode(
+                                        code,
+                                        .rmdir,
+                                    ),
+                                };
+                            };
+
+                            return Maybe(Return.Rm).success;
+                        }
+
+                        if (args.force) {
+                            return Maybe(Return.Rm).success;
+                        }
+
+                        {
+                            const code: std.os.E = switch (er) {
+                                error.AccessDenied => .PERM,
+                                error.SymLinkLoop => .LOOP,
+                                error.NameTooLong => .NAMETOOLONG,
+                                error.SystemResources => .NOMEM,
+                                error.ReadOnlyFileSystem => .ROFS,
+                                error.FileBusy => .BUSY,
+                                error.InvalidUtf8 => .INVAL,
+                                error.BadPathName => .INVAL,
+                                error.FileNotFound => .NOENT,
+                                else => .FAULT,
+                            };
+
+                            return .{
+                                .err = JSC.Node.Syscall.Error.fromCode(
+                                    code,
+                                    .unlink,
+                                ),
+                            };
+                        }
+                    };
+
+                    return Maybe(Return.Rm).success;
+                }
+            },
+            else => {},
+        }
+
         return Maybe(Return.Rm).todo;
     }
     pub fn stat(this: *NodeFS, args: Arguments.Stat, comptime flavor: Flavor) Maybe(Return.Stat) {

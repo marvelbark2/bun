@@ -4,6 +4,7 @@
  * Copyright (c) 2015 Igalia.
  * Copyright (c) 2015, 2016 Canon Inc. All rights reserved.
  * Copyright (c) 2015, 2016, 2017 Canon Inc.
+ * Copyright (c) 2016, 2018 -2018 Apple Inc. All rights reserved.
  * Copyright (c) 2016, 2020 Apple Inc. All rights reserved.
  * Copyright (c) 2022 Codeblog Corp. All rights reserved.
  * 
@@ -168,7 +169,7 @@ const char* const s_importMetaObjectLoadCJS2ESMCode =
 const JSC::ConstructAbility s_importMetaObjectRequireESMCodeConstructAbility = JSC::ConstructAbility::CannotConstruct;
 const JSC::ConstructorKind s_importMetaObjectRequireESMCodeConstructorKind = JSC::ConstructorKind::None;
 const JSC::ImplementationVisibility s_importMetaObjectRequireESMCodeImplementationVisibility = JSC::ImplementationVisibility::Public;
-const int s_importMetaObjectRequireESMCodeLength = 561;
+const int s_importMetaObjectRequireESMCodeLength = 626;
 static const JSC::Intrinsic s_importMetaObjectRequireESMCodeIntrinsic = JSC::NoIntrinsic;
 const char* const s_importMetaObjectRequireESMCode =
     "(function (resolved) {\n" \
@@ -184,9 +185,13 @@ const char* const s_importMetaObjectRequireESMCode =
     "  }\n" \
     "  var exports = @Loader.getModuleNamespaceObject(entry.module);\n" \
     "  var commonJS = exports.default;\n" \
-    "  if (commonJS && @isCallable(commonJS) && @commonJSSymbol in commonJS) {\n" \
+    "  var cjs = commonJS && commonJS[@commonJSSymbol];\n" \
+    "  if (cjs === 0) {\n" \
+    "    return commonJS;\n" \
+    "  } else if (cjs && @isCallable(commonJS)) {\n" \
     "    return commonJS();\n" \
     "  }\n" \
+    "  \n" \
     "  return exports;\n" \
     "})\n" \
 ;

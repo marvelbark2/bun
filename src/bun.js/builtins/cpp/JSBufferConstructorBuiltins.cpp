@@ -4,6 +4,7 @@
  * Copyright (c) 2015 Igalia.
  * Copyright (c) 2015, 2016 Canon Inc. All rights reserved.
  * Copyright (c) 2015, 2016, 2017 Canon Inc.
+ * Copyright (c) 2016, 2018 -2018 Apple Inc. All rights reserved.
  * Copyright (c) 2016, 2020 Apple Inc. All rights reserved.
  * Copyright (c) 2022 Codeblog Corp. All rights reserved.
  * 
@@ -51,7 +52,7 @@ namespace WebCore {
 const JSC::ConstructAbility s_jsBufferConstructorFromCodeConstructAbility = JSC::ConstructAbility::CannotConstruct;
 const JSC::ConstructorKind s_jsBufferConstructorFromCodeConstructorKind = JSC::ConstructorKind::None;
 const JSC::ImplementationVisibility s_jsBufferConstructorFromCodeImplementationVisibility = JSC::ImplementationVisibility::Public;
-const int s_jsBufferConstructorFromCodeLength = 1019;
+const int s_jsBufferConstructorFromCodeLength = 1033;
 static const JSC::Intrinsic s_jsBufferConstructorFromCodeIntrinsic = JSC::NoIntrinsic;
 const char* const s_jsBufferConstructorFromCode =
     "(function (items) {\n" \
@@ -89,7 +90,10 @@ const char* const s_jsBufferConstructorFromCode =
     "        return result;\n" \
     "    } \n" \
     "\n" \
-    "    return @tailCallForwardArguments(@Uint8Array.from, this);\n" \
+    "    //\n" \
+    "    //\n" \
+    "    //\n" \
+    "    return this.toBuffer(@Uint8Array.from(arrayLike));\n" \
     "})\n" \
 ;
 

@@ -319,3 +319,47 @@ pub const LinearFifo = @import("./linear_fifo.zig").LinearFifo;
 pub fn hash(content: []const u8) u64 {
     return std.hash.Wyhash.hash(0, content);
 }
+
+pub const HiveArray = @import("./hive_array.zig").HiveArray;
+
+pub fn rand(bytes: []u8) void {
+    const BoringSSL = @import("boringssl");
+    _ = BoringSSL.RAND_bytes(bytes.ptr, bytes.len);
+}
+
+pub const ObjectPool = @import("./pool.zig").ObjectPool;
+
+pub fn assertNonBlocking(fd: anytype) void {
+    std.debug.assert(
+        (std.os.fcntl(fd, std.os.F.GETFL, 0) catch unreachable) & std.os.O.NONBLOCK != 0,
+    );
+}
+
+pub fn ensureNonBlocking(fd: anytype) void {
+    const current = std.os.fcntl(fd, std.os.F.GETFL, 0) catch 0;
+    _ = std.os.fcntl(fd, std.os.F.SETFL, current | std.os.O.NONBLOCK) catch 0;
+}
+
+pub fn isReadable(fd: std.os.fd_t) bool {
+    var polls = &[_]std.os.pollfd{
+        .{
+            .fd = fd,
+            .events = std.os.POLL.IN | std.os.POLL.ERR,
+            .revents = 0,
+        },
+    };
+
+    return (std.os.poll(polls, 0) catch 0) != 0;
+}
+
+pub fn isWritable(fd: std.os.fd_t) bool {
+    var polls = &[_]std.os.pollfd{
+        .{
+            .fd = fd,
+            .events = std.os.POLL.OUT | std.os.POLL.ERR,
+            .revents = 0,
+        },
+    };
+
+    return (std.os.poll(polls, 0) catch 0) != 0;
+}

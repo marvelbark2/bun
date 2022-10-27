@@ -7,7 +7,7 @@ shallow = true
 fetchRecurseSubmodules = false
 [submodule "src/javascript/jsc/WebKit"]
 path = src/bun.js/WebKit
-url = https://github.com/Jarred-Sumner/WebKit.git
+url = https://github.com/oven-sh/WebKit.git
 ignore = dirty
 depth = 1
 update = none
@@ -65,6 +65,13 @@ fetchRecurseSubmodules = true
 [submodule "src/deps/tinycc"]
 path = src/deps/tinycc
 url = https://github.com/Jarred-Sumner/tinycc.git
+ignore = dirty
+depth = 1
+shallow = true
+fetchRecurseSubmodules = false
+[submodule "src/deps/oniguruma"]
+path = src/deps/oniguruma
+url = https://github.com/kkos/oniguruma
 ignore = dirty
 depth = 1
 shallow = true

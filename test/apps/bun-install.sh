@@ -5,7 +5,7 @@ set -euo pipefail
 dir=$(mktemp -d)
 
 cd $dir
-${NPM_CLIENT:-$(which bun)} add react react-dom @types/react @babel/parser esbuild
+${NPM_CLIENT:-$(which bun)} add react react-dom @types/react @babel/parser esbuild vite@3.0.0
 
 echo "console.log(typeof require(\"react\").createElement);" >index.js
 chmod +x index.js
@@ -26,10 +26,14 @@ chmod +x index.js
 JS_RUNTIME=${JS_RUNTIME:-"$(which bun)"}
 
 # If this fails to run, it means we didn't link @babel/parser correctly
-realpath -e ./node_modules/.bin/parser
+$(which grealpath || which realpath) -e ./node_modules/.bin/parser >/dev/null
 
-# If this fails to run, it means we didn't link esbuild correctly
+# If this fails to run, it means we didn't link esbuild correctly or esbuild's install script broke
+# - https://github.com/evanw/esbuild/issues/2558
 ./node_modules/.bin/esbuild --version >/dev/null
+
+VITE_ESBUILD="$(echo node_modules/vite/node_modules/esbuild-*)"
+$VITE_ESBUILD/bin/esbuild --version >/dev/null
 
 if [ "$JS_RUNTIME" == "node" ]; then
     result="$(node ./index.js)"

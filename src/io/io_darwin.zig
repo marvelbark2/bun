@@ -259,6 +259,7 @@ const fd_t = os.fd_t;
 const mem = std.mem;
 const assert = std.debug.assert;
 const c = std.c;
+const bun = @import("../global.zig");
 pub const darwin = struct {
     pub usingnamespace os.darwin;
     pub extern "c" fn @"recvfrom$NOCANCEL"(sockfd: c.fd_t, noalias buf: *anyopaque, len: usize, flags: u32, noalias src_addr: ?*c.sockaddr, noalias addrlen: ?*c.socklen_t) isize;
@@ -501,13 +502,16 @@ pub const Waker = struct {
     kq: os.fd_t,
     machport: *anyopaque = undefined,
     machport_buf: []u8 = &.{},
+    has_pending_wake: bool = false,
 
     const zeroed = std.mem.zeroes([16]Kevent64);
 
-    pub fn wake(this: Waker) !void {
-        if (!io_darwin_schedule_wakeup(this.machport)) {
-            return error.WakeUpFailed;
+    pub fn wake(this: *Waker) !void {
+        if (io_darwin_schedule_wakeup(this.machport)) {
+            this.has_pending_wake = false;
+            return;
         }
+        this.has_pending_wake = true;
     }
 
     pub fn wait(this: Waker) !usize {
@@ -542,7 +546,10 @@ pub const Waker = struct {
     ) bool;
 
     pub fn init(allocator: std.mem.Allocator) !Waker {
-        const kq = try os.kqueue();
+        return initWithFileDescriptor(allocator, try std.os.kqueue());
+    }
+
+    pub fn initWithFileDescriptor(allocator: std.mem.Allocator, kq: i32) !Waker {
         assert(kq > -1);
         var machport_buf = try allocator.alloc(u8, 1024);
         const machport = io_darwin_create_machport(
@@ -1332,12 +1339,7 @@ pub fn read(
         struct {
             fn doOperation(op: anytype) ReadError!usize {
                 while (true) {
-                    const rc = if (op.positional) os.system.pread(
-                        op.fd,
-                        op.buf,
-                        op.len,
-                        @bitCast(isize, op.offset),
-                    ) else os.system.read(
+                    const rc = os.system.read(
                         op.fd,
                         op.buf,
                         op.len,
@@ -1570,7 +1572,10 @@ pub fn write(
         },
         struct {
             fn doOperation(op: anytype) WriteError!usize {
-                return os.pwrite(op.fd, op.buf[0..op.len], op.offset);
+
+                // Unlike Linux, macOS doesn't ignore file offsets for unseekable files, so we have to
+                // use write() instead of pwrite().
+                return std.os.write(op.fd, op.buf[0..op.len]);
             }
         },
     );

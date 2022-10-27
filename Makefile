@@ -35,6 +35,7 @@ NATIVE_OR_OLD_MARCH = -march=westmere
 endif
 
 MIN_MACOS_VERSION ?= $(DEFAULT_MIN_MACOS_VERSION)
+BUN_BASE_VERSION = 0.2
 
 AR=
 
@@ -50,7 +51,7 @@ RELEASE_BUN = $(PACKAGE_DIR)/bun
 DEBUG_BIN = $(DEBUG_PACKAGE_DIR)/
 DEBUG_BUN = $(DEBUG_BIN)/bun-debug
 BUILD_ID = $(shell cat ./build-id)
-PACKAGE_JSON_VERSION = 0.1.$(BUILD_ID)
+PACKAGE_JSON_VERSION = $(BUN_BASE_VERSION).$(BUILD_ID)
 BUN_BUILD_TAG = bun-v$(PACKAGE_JSON_VERSION)
 BUN_RELEASE_BIN = $(PACKAGE_DIR)/bun
 PRETTIER ?= $(shell which prettier || echo "./node_modules/.bin/prettier")
@@ -267,36 +268,39 @@ DEBUG_MODULES_OBJ_FILES := $(patsubst $(MODULES_DIR)/%.cpp,$(DEBUG_OBJ_DIR)/%.o,
 BINDINGS_OBJ := $(OBJ_FILES) $(WEBCORE_OBJ_FILES) $(SQLITE_OBJ_FILES) $(NODE_OS_OBJ_FILES) $(BUILTINS_OBJ_FILES) $(IO_FILES) $(MODULES_OBJ_FILES)
 DEBUG_BINDINGS_OBJ := $(DEBUG_OBJ_FILES) $(DEBUG_WEBCORE_OBJ_FILES) $(DEBUG_SQLITE_OBJ_FILES) $(DEBUG_NODE_OS_OBJ_FILES) $(DEBUG_BUILTINS_OBJ_FILES) $(DEBUG_IO_FILES) $(DEBUG_MODULES_OBJ_FILES)
 
-MAC_INCLUDE_DIRS := -I$(WEBKIT_RELEASE_DIR)/JavaScriptCore/PrivateHeaders \
-		-I$(WEBKIT_RELEASE_DIR)/WTF/Headers \
+ALL_JSC_INCLUDE_DIRS := -I$(WEBKIT_RELEASE_DIR)/WTF/Headers \
 		-I$(WEBKIT_RELEASE_DIR)/ICU/Headers \
+		-I$(WEBKIT_RELEASE_DIR)/bmalloc/Headers \
 		-I$(WEBKIT_RELEASE_DIR)/ \
-		-Isrc/bun.js/bindings/ \
-		-Isrc/bun.js/builtins/ \
-		-Isrc/bun.js/bindings/webcore \
-		-Isrc/bun.js/bindings/sqlite \
-		-Isrc/bun.js/builtins/cpp \
-		-Isrc/bun.js/bindings/node_os \
-		-Isrc/bun.js/modules \
-		-I$(WEBKIT_DIR)/Source/bmalloc  \
-		-I$(WEBKIT_DIR)/Source \
+		-I$(WEBKIT_RELEASE_DIR)/include \
+		-I$(WEBKIT_RELEASE_DIR)/JavaScriptCore/PrivateHeaders \
+		-I$(WEBKIT_RELEASE_DIR)/bmalloc/PrivateHeaders \
+		-I$(WEBKIT_RELEASE_DIR)/WTF/PrivateHeaders
+
+SHARED_INCLUDE_DIR = -I$(realpath src/bun.js/bindings)/ \
+		-I$(realpath src/bun.js/builtins/) \
+		-I$(realpath src/bun.js/bindings) \
+		-I$(realpath src/bun.js/bindings/webcore) \
+		-I$(realpath src/bun.js/bindings/webcrypto) \
+		-I$(realpath src/bun.js/bindings/sqlite) \
+		-I$(realpath src/bun.js/builtins/cpp) \
+		-I$(realpath src/bun.js/bindings/node_os) \
+		-I$(realpath src/bun.js/modules) \
 		-I$(JSC_INCLUDE_DIR)
 
-LINUX_INCLUDE_DIRS := -I$(JSC_INCLUDE_DIR) \
-						-Isrc/bun.js/builtins/ \
-					  -Isrc/bun.js/bindings/ \
-					  -Isrc/bun.js/bindings/webcore \
-					  -Isrc/bun.js/bindings/sqlite \
-					  -Isrc/bun.js/builtins/cpp \
-					  -Isrc/bun.js/bindings/node_os \
-						-Isrc/bun.js/modules \
+MAC_INCLUDE_DIRS :=  $(ALL_JSC_INCLUDE_DIRS) \
+		$(SHARED_INCLUDE_DIR) \
+		-I$(WEBKIT_DIR)/Source \
+
+LINUX_INCLUDE_DIRS := $(ALL_JSC_INCLUDE_DIRS) \
+					   $(SHARED_INCLUDE_DIR) \
 					  -I$(ZLIB_INCLUDE_DIR)
 
 
 UWS_INCLUDE_DIR := -I$(BUN_DEPS_DIR)/uws/uSockets/src -I$(BUN_DEPS_DIR)/uws/src -I$(BUN_DEPS_DIR)
 
 
-INCLUDE_DIRS := $(UWS_INCLUDE_DIR) -I$(BUN_DEPS_DIR)/mimalloc/include -Isrc/napi
+INCLUDE_DIRS := $(UWS_INCLUDE_DIR) -I$(BUN_DEPS_DIR)/mimalloc/include -Isrc/napi -I$(BUN_DEPS_DIR)/boringssl/include
 
 
 ifeq ($(OS_NAME),linux)
@@ -373,7 +377,7 @@ endif
 SHARED_LIB_EXTENSION = .so
 
 JSC_BINDINGS = $(BINDINGS_OBJ) $(JSC_FILES)
-JSC_BINDINGS_DEBUG = $(DEBUG_BINDINGS_OBJ) $(JSC_FILES_DEBUG)
+JSC_BINDINGS_DEBUG = $(DEBUG_BINDINGS_OBJ) $(JSC_FILES_DEBUG) 
 
 RELEASE_FLAGS=
 DEBUG_FLAGS=
@@ -393,7 +397,8 @@ MINIMUM_ARCHIVE_FILES = -L$(BUN_DEPS_OUT_DIR) \
 	-lssl \
 	-lcrypto \
 	-llolhtml \
-	$(BUN_DEPS_OUT_DIR)/libbacktrace.a
+	-lonig \
+	$(BUN_DEPS_OUT_DIR)/libbacktrace.a \
 
 ARCHIVE_FILES_WITHOUT_LIBCRYPTO = $(MINIMUM_ARCHIVE_FILES) \
 		-larchive \
@@ -438,9 +443,9 @@ BUN_LLD_FLAGS_WITHOUT_JSC = $(ARCHIVE_FILES) \
 
 
 
-BUN_LLD_FLAGS = $(BUN_LLD_FLAGS_WITHOUT_JSC)  $(JSC_FILES) $(BINDINGS_OBJ)
-BUN_LLD_FLAGS_DEBUG = $(BUN_LLD_FLAGS_WITHOUT_JSC) $(JSC_FILES_DEBUG) $(DEBUG_BINDINGS_OBJ)
-BUN_LLD_FLAGS_FAST = $(BUN_LLD_FLAGS_WITHOUT_JSC)  $(JSC_FILES_DEBUG) $(BINDINGS_OBJ)
+BUN_LLD_FLAGS = $(BUN_LLD_FLAGS_WITHOUT_JSC)  $(JSC_FILES) $(BINDINGS_OBJ) -lwebcrypto
+BUN_LLD_FLAGS_DEBUG = $(BUN_LLD_FLAGS_WITHOUT_JSC) $(JSC_FILES_DEBUG) $(DEBUG_BINDINGS_OBJ) -lwebcrypto-debug
+BUN_LLD_FLAGS_FAST = $(BUN_LLD_FLAGS_WITHOUT_JSC)  $(JSC_FILES_DEBUG) $(BINDINGS_OBJ) -lwebcrypto-debug
 
 CLANG_VERSION = $(shell $(CC) --version | awk '/version/ {for(i=1; i<=NF; i++){if($$i=="version"){split($$(i+1),v,".");print v[1]}}}')
 
@@ -482,9 +487,13 @@ builtins: ## to generate builtins
 	$(shell which python || which python2) $(realpath $(WEBKIT_DIR)/Source/JavaScriptCore/Scripts/generate-js-builtins.py) -i $(realpath src)/bun.js/builtins/js  -o $(realpath src)/bun.js/builtins/cpp --framework WebCore --force
 	$(shell which python || which python2) $(realpath $(WEBKIT_DIR)/Source/JavaScriptCore/Scripts/generate-js-builtins.py) -i $(realpath src)/bun.js/builtins/js  -o $(realpath src)/bun.js/builtins/cpp --framework WebCore --wrappers-only
 	rm -rf /tmp/1.h src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.h.1
-	echo -e '// clang-format off\nnamespace Zig { class GlobalObject; }' >> /tmp/1.h
+	echo -e '// clang-format off\nnamespace Zig { class GlobalObject; }\n#include "root.h"\n' >> /tmp/1.h
 	cat /tmp/1.h  src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.h > src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.h.1
 	mv src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.h.1 src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.h
+	rm -rf /tmp/1.h src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.h.1
+	echo -e '// clang-format off\nnamespace Zig { class GlobalObject; }\n#include "root.h"\n' >> /tmp/1.h
+	cat /tmp/1.h  src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.cpp > src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.cpp.1
+	mv src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.cpp.1 src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.cpp
 	$(SED) -i -e 's/class JSDOMGlobalObject/using JSDOMGlobalObject = Zig::GlobalObject/' src/bun.js/builtins/cpp/WebCoreJSBuiltinInternals.h
 	# this is the one we actually build
 	mv src/bun.js/builtins/cpp/*JSBuiltin*.cpp src/bun.js/builtins
@@ -493,7 +502,7 @@ builtins: ## to generate builtins
 generate-builtins: builtins
 
 .PHONY: tinycc
-vendor-without-check: npm-install node-fallbacks runtime_js fallback_decoder bun_error mimalloc picohttp zlib boringssl libarchive libbacktrace lolhtml usockets uws base64 tinycc
+vendor-without-check: npm-install node-fallbacks runtime_js fallback_decoder bun_error mimalloc picohttp zlib boringssl libarchive libbacktrace lolhtml usockets uws base64 tinycc oniguruma
 
 BUN_TYPES_REPO_PATH ?= $(realpath ../bun-types)
 
@@ -547,6 +556,13 @@ libbacktrace:
 	make -j$(CPUS) && \
 	cp ./.libs/libbacktrace.a $(BUN_DEPS_OUT_DIR)/libbacktrace.a
 
+.PHONY: oniguruma
+oniguruma:
+	cd $(BUN_DEPS_DIR)/oniguruma && \
+	autoreconf -vfi && \
+	CFLAGS="$(CFLAGS)" CC=$(CC) ./configure && \
+	make -j${CPUS} && \
+	cp ./src/.libs/libonig.a $(BUN_DEPS_OUT_DIR)/libonig.a
 
 sqlite:
 
@@ -807,7 +823,7 @@ ifeq ($(OS_NAME),darwin)
 
 # Hardened runtime will not work with debugging
 bun-codesign-debug:
-	codesign --entitlements $(realpath entitlements.plist) --force --timestamp --sign "$(CODESIGN_IDENTITY)" -vvvv --deep --strict $(DEBUG_BUN)
+	codesign --entitlements $(realpath entitlements.debug.plist) --force --timestamp --sign "$(CODESIGN_IDENTITY)" -vvvv --deep --strict $(DEBUG_BUN)
 
 bun-codesign-release-local:
 	codesign --entitlements $(realpath entitlements.plist) --options runtime --force --timestamp --sign "$(CODESIGN_IDENTITY)" -vvvv --deep --strict $(RELEASE_BUN)
@@ -868,7 +884,7 @@ MIMALLOC_OVERRIDE_FLAG ?=
 
 
 bump:
-	expr 0.1.0 + 1 > build-id
+	expr 0.2.0 + 1 > build-id
 
 .PHONY: identifier-cache
 identifier-cache:
@@ -1313,7 +1329,7 @@ release-bindings: $(OBJ_DIR) $(OBJ_FILES) $(WEBCORE_OBJ_FILES) $(SQLITE_OBJ_FILE
 # Do not add $(DEBUG_DIR) to this list
 # It will break caching, causing you to have to wait for every .cpp file to rebuild.
 .PHONY: bindings
-bindings: $(DEBUG_OBJ_FILES) $(DEBUG_WEBCORE_OBJ_FILES) $(DEBUG_SQLITE_OBJ_FILES) $(DEBUG_NODE_OS_OBJ_FILES) $(DEBUG_BUILTINS_OBJ_FILES) $(DEBUG_IO_FILES) $(DEBUG_MODULES_OBJ_FILES)
+bindings: $(DEBUG_OBJ_DIR) $(DEBUG_OBJ_FILES) $(DEBUG_WEBCORE_OBJ_FILES) $(DEBUG_SQLITE_OBJ_FILES) $(DEBUG_NODE_OS_OBJ_FILES) $(DEBUG_BUILTINS_OBJ_FILES) $(DEBUG_IO_FILES) $(DEBUG_MODULES_OBJ_FILES)
 
 .PHONY: jsc-bindings-mac
 jsc-bindings-mac: bindings
@@ -1615,6 +1631,54 @@ $(DEBUG_OBJ_DIR)/%.o: src/bun.js/modules/%.cpp
 		$(EMIT_LLVM_FOR_DEBUG) \
 		-g3 -c -o $@ $<
 
+
+
+$(DEBUG_OBJ_DIR)/webcrypto/%.o: src/bun.js/bindings/webcrypto/%.cpp
+	$(CXX) $(CLANG_FLAGS) \
+		$(MACOS_MIN_FLAG) \
+		$(DEBUG_OPTIMIZATION_LEVEL) \
+		-fno-exceptions \
+		-I$(SRC_DIR) \
+		-fno-rtti \
+		-ferror-limit=1000 \
+		$(EMIT_LLVM_FOR_DEBUG) \
+		-g3 -c -o $@ $<
+
+
+.PHONY: webcrypto-debug-obj
+# Make all the .cpp files in the webcrypto directory into .o files using Makefile substitutions
+webcrypto-debug-obj: $(patsubst src/bun.js/bindings/webcrypto/%.cpp, $(DEBUG_OBJ_DIR)/webcrypto/%.o, $(wildcard src/bun.js/bindings/webcrypto/*.cpp))
+
+.PHONY: webcrypto-debug
+webcrypto-debug:
+	rm -rf $(DEBUG_OBJ_DIR)/webcrypto $(BUN_DEPS_OUT_DIR)/libwebcrypto-debug.a
+	mkdir -p $(DEBUG_OBJ_DIR)/webcrypto
+	make webcrypto-debug-obj -j$(CPUS)
+	$(AR) rcs $(BUN_DEPS_OUT_DIR)/libwebcrypto-debug.a $(DEBUG_OBJ_DIR)/webcrypto/*.o
+
+
+$(OBJ_DIR)/webcrypto/%.o: src/bun.js/bindings/webcrypto/%.cpp
+	$(CXX) $(CLANG_FLAGS) \
+		$(MACOS_MIN_FLAG) \
+		$(OPTIMIZATION_LEVEL) \
+		-fno-exceptions \
+		-fno-rtti \
+		-ferror-limit=1000 \
+		$(EMIT_LLVM_FOR_RELEASE) \
+		-g3 -c -o $@ $<
+
+
+.PHONY: webcrypto-obj
+# Make all the .cpp files in the webcrypto directory into .o files using Makefile substitutions
+webcrypto-obj: $(patsubst src/bun.js/bindings/webcrypto/%.cpp, $(OBJ_DIR)/webcrypto/%.o, $(wildcard src/bun.js/bindings/webcrypto/*.cpp))
+
+.PHONY: webcrypto
+webcrypto:
+	rm -rf $(OBJ_DIR)/webcrypto $(BUN_DEPS_OUT_DIR)/libwebcrypto.a
+	mkdir -p $(OBJ_DIR)/webcrypto
+	make webcrypto-obj -j$(CPUS)
+	$(AR) rcs $(BUN_DEPS_OUT_DIR)/libwebcrypto.a $(OBJ_DIR)/webcrypto/*.o
+
 sizegen:
 	mkdir -p $(BUN_TMP_DIR)
 	$(CXX) src/bun.js/headergen/sizegen.cpp -Wl,-dead_strip -Wl,-dead_strip_dylibs -fuse-ld=lld -o $(BUN_TMP_DIR)/sizegen $(CLANG_FLAGS) -O1 
@@ -1782,3 +1846,4 @@ PACKAGE_MAP = --pkg-begin thread_pool $(BUN_DIR)/src/thread_pool.zig --pkg-begin
 
 .PHONY: bun
 bun: vendor identifier-cache build-obj bun-link-lld-release bun-codesign-release-local
+

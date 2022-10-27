@@ -87,6 +87,9 @@ pub const Version = struct {
     pub const folder_name = "bun-" ++ triplet ++ suffix;
     pub const zip_filename = folder_name ++ ".zip";
 
+    pub const profile_folder_name = "bun-" ++ triplet ++ suffix ++ "-profile";
+    pub const profile_zip_filename = profile_folder_name ++ ".zip";
+
     const current_version: string = "bun-v" ++ Global.package_json_version;
 
     pub fn isCurrent(this: Version) bool {
@@ -117,7 +120,7 @@ pub const UpgradeCheckerThread = struct {
             js_ast.Expr.Data.Store.deinit();
             js_ast.Stmt.Data.Store.deinit();
         }
-        var version = (try UpgradeCommand.getLatestVersion(default_allocator, env_loader, undefined, undefined, true)) orelse return;
+        var version = (try UpgradeCommand.getLatestVersion(default_allocator, env_loader, undefined, undefined, false, true)) orelse return;
 
         if (!version.isCurrent()) {
             if (version.name()) |name| {
@@ -151,6 +154,7 @@ pub const UpgradeCommand = struct {
         env_loader: *DotEnv.Loader,
         refresher: *std.Progress,
         progress: *std.Progress.Node,
+        use_profile: bool,
         comptime silent: bool,
     ) !?Version {
         var headers_buf: string = default_github_headers;
@@ -207,11 +211,19 @@ pub const UpgradeCommand = struct {
         }
 
         var metadata_body = try MutableString.init(allocator, 2048);
-        var request_body = try MutableString.init(allocator, 0);
 
         // ensure very stable memory address
         var async_http: *HTTP.AsyncHTTP = allocator.create(HTTP.AsyncHTTP) catch unreachable;
-        async_http.* = try HTTP.AsyncHTTP.init(allocator, .GET, api_url, header_entries, headers_buf, &metadata_body, &request_body, 60 * std.time.ns_per_min);
+        async_http.* = HTTP.AsyncHTTP.initSync(
+            allocator,
+            .GET,
+            api_url,
+            header_entries,
+            headers_buf,
+            &metadata_body,
+            "",
+            60 * std.time.ns_per_min,
+        );
         if (!silent) async_http.client.progress_node = progress;
         const response = try async_http.sendSync(true);
 
@@ -316,23 +328,26 @@ pub const UpgradeCommand = struct {
                 if (asset.asProperty("name")) |name_| {
                     if (name_.expr.asString(allocator)) |name| {
                         if (comptime Environment.isDebug) {
-                            Output.prettyln("Comparing {s} vs {s}", .{ name, Version.zip_filename });
+                            const filename = if (!use_profile) Version.zip_filename else Version.profile_zip_filename;
+                            Output.prettyln("Comparing {s} vs {s}", .{ name, filename });
                             Output.flush();
                         }
-                        if (strings.eqlComptime(name, Version.zip_filename)) {
-                            version.zip_url = (asset.asProperty("browser_download_url") orelse break :get_asset).expr.asString(allocator) orelse break :get_asset;
-                            if (comptime Environment.isDebug) {
-                                Output.prettyln("Found Zip {s}", .{version.zip_url});
-                                Output.flush();
-                            }
 
-                            if (asset.asProperty("size")) |size_| {
-                                if (size_.expr.data == .e_number) {
-                                    version.size = @intCast(u32, @maximum(@floatToInt(i32, std.math.ceil(size_.expr.data.e_number.value)), 0));
-                                }
-                            }
-                            return version;
+                        if (!use_profile and !strings.eqlComptime(name, Version.zip_filename)) continue;
+                        if (use_profile and !strings.eqlComptime(name, Version.profile_zip_filename)) continue;
+
+                        version.zip_url = (asset.asProperty("browser_download_url") orelse break :get_asset).expr.asString(allocator) orelse break :get_asset;
+                        if (comptime Environment.isDebug) {
+                            Output.prettyln("Found Zip {s}", .{version.zip_url});
+                            Output.flush();
                         }
+
+                        if (asset.asProperty("size")) |size_| {
+                            if (size_.expr.data == .e_number) {
+                                version.size = @intCast(u32, @maximum(@floatToInt(i32, std.math.ceil(size_.expr.data.e_number.value)), 0));
+                            }
+                        }
+                        return version;
                     }
                 }
             }
@@ -353,12 +368,13 @@ pub const UpgradeCommand = struct {
         return null;
     }
     const exe_subpath = Version.folder_name ++ std.fs.path.sep_str ++ "bun";
+    const profile_exe_subpath = Version.profile_folder_name ++ std.fs.path.sep_str ++ "bun-profile";
 
     pub fn exec(ctx: Command.Context) !void {
         @setCold(true);
 
         _exec(ctx) catch |err| {
-            Output.prettyErrorln("<r>bun upgrade failed with error: <red><b>{s}<r>\n\n<cyan>Please upgrade manually<r>:\n  <b>curl https://bun.sh/install | bash<r>\n\n", .{@errorName(err)});
+            Output.prettyErrorln("<r>bun upgrade failed with error: <red><b>{s}<r>\n\n<cyan>Please upgrade manually<r>:\n  <b>curl -fsSL https://bun.sh/install | bash<r>\n\n", .{@errorName(err)});
             Global.exit(1);
         };
     }
@@ -387,11 +403,13 @@ pub const UpgradeCommand = struct {
                 strings.containsAny(bun.span(std.os.argv), "--canary") or default_use_canary;
         };
 
+        const use_profile = strings.containsAny(bun.span(std.os.argv), "--profile");
+
         if (!use_canary) {
             var refresher = std.Progress{};
             var progress = refresher.start("Fetching version tags", 0);
 
-            version = (try getLatestVersion(ctx.allocator, &env_loader, &refresher, progress, false)) orelse return;
+            version = (try getLatestVersion(ctx.allocator, &env_loader, &refresher, progress, use_profile, false)) orelse return;
 
             progress.end();
             refresher.refresh();
@@ -432,16 +450,15 @@ pub const UpgradeCommand = struct {
             var async_http = ctx.allocator.create(HTTP.AsyncHTTP) catch unreachable;
             var zip_file_buffer = try ctx.allocator.create(MutableString);
             zip_file_buffer.* = try MutableString.init(ctx.allocator, @maximum(version.size, 1024));
-            var request_buffer = try MutableString.init(ctx.allocator, 0);
 
-            async_http.* = try HTTP.AsyncHTTP.init(
+            async_http.* = HTTP.AsyncHTTP.initSync(
                 ctx.allocator,
                 .GET,
                 URL.parse(version.zip_url),
                 .{},
                 "",
                 zip_file_buffer,
-                &request_buffer,
+                "",
                 timeout,
             );
             async_http.client.timeout = timeout;
@@ -499,6 +516,8 @@ pub const UpgradeCommand = struct {
             std.os.chdirZ(tmpdir_z) catch {};
 
             const tmpname = "bun.zip";
+            const exe =
+                if (use_profile) profile_exe_subpath else exe_subpath;
 
             var zip_file = save_dir.createFileZ(tmpname, .{ .truncate = true }) catch |err| {
                 Output.prettyErrorln("<r><red>error:<r> Failed to open temp file {s}", .{@errorName(err)});
@@ -556,7 +575,7 @@ pub const UpgradeCommand = struct {
             }
             {
                 var verify_argv = [_]string{
-                    exe_subpath,
+                    exe,
                     "--version",
                 };
 
@@ -624,7 +643,7 @@ pub const UpgradeCommand = struct {
                     Global.exit(1);
                 };
 
-                const dest_stat = save_dir.statFile(exe_subpath) catch |err| {
+                const dest_stat = save_dir.statFile(exe) catch |err| {
                     save_dir_.deleteTree(version_name) catch {};
                     Output.prettyErrorln("<r><red>error:<r> Failed to stat source bun {s}", .{@errorName(err)});
                     Global.exit(1);
@@ -639,7 +658,7 @@ pub const UpgradeCommand = struct {
                         Global.exit(1);
                     });
 
-                    const source_hash = std.hash.Wyhash.hash(0, save_dir.readFile(exe_subpath, input_buf) catch |err| {
+                    const source_hash = std.hash.Wyhash.hash(0, save_dir.readFile(exe, input_buf) catch |err| {
                         save_dir_.deleteTree(version_name) catch {};
                         Output.prettyErrorln("<r><red>error:<r> Failed to read source bun {s}", .{@errorName(err)});
                         Global.exit(1);
@@ -657,9 +676,9 @@ pub const UpgradeCommand = struct {
             }
 
             if (env_loader.map.get("BUN_DRY_RUN") == null) {
-                C.moveFileZ(save_dir.fd, exe_subpath, target_dir.fd, target_filename) catch |err| {
+                C.moveFileZ(save_dir.fd, exe, target_dir.fd, target_filename) catch |err| {
                     save_dir_.deleteTree(version_name) catch {};
-                    Output.prettyErrorln("<r><red>error:<r> Failed to move new version of bun due to {s}. You could try the install script instead:\n   curl -L https://bun.sh/install | bash", .{@errorName(err)});
+                    Output.prettyErrorln("<r><red>error:<r> Failed to move new version of bun due to {s}. You could try the install script instead:\n   curl -fsSL https://bun.sh/install | bash", .{@errorName(err)});
                     Global.exit(1);
                 };
             }

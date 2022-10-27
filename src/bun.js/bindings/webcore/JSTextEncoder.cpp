@@ -216,8 +216,8 @@ template<> void JSTextEncoderDOMConstructor::initializeProperties(VM& vm, JSDOMG
 constexpr JSC::DFG::AbstractHeapKind heapKinds[4] = { JSC::DFG::HeapObjectCount };
 
 // This is the equivalent of DataView.set
-constexpr JSC::DFG::AbstractHeapKind encodeIntoRead[4] = { JSC::DFG::MiscFields, JSC::DFG::TypedArrayProperties };
-constexpr JSC::DFG::AbstractHeapKind encodeIntoWrite[4] = { JSC::DFG::TypedArrayProperties };
+constexpr JSC::DFG::AbstractHeapKind encodeIntoRead[4] = { JSC::DFG::MiscFields, JSC::DFG::TypedArrayProperties, JSC::DFG::Absolute };
+constexpr JSC::DFG::AbstractHeapKind encodeIntoWrite[4] = { JSC::DFG::TypedArrayProperties, JSC::DFG::Absolute };
 
 static const JSC::DOMJIT::Signature DOMJITSignatureForJSTextEncoderEncodeWithoutTypeCheck(
     jsTextEncoderEncodeWithoutTypeCheck,
@@ -258,6 +258,7 @@ JSC_DEFINE_JIT_OPERATION(jsTextEncoderEncodeWithoutTypeCheck, JSC::EncodedJSValu
     String str;
     if (input->is8Bit()) {
         if (input->isRope()) {
+            GCDeferralContext gcDeferralContext(vm);
             auto encodedValue = TextEncoder__encodeRopeString(lexicalGlobalObject, input);
             if (!JSC::JSValue::decode(encodedValue).isUndefined()) {
                 RELEASE_AND_RETURN(throwScope, encodedValue);
@@ -289,9 +290,9 @@ JSC_DEFINE_JIT_OPERATION(jsTextEncoderPrototypeFunction_encodeIntoWithoutTypeChe
     auto source = sourceStr->value(lexicalGlobalObject);
     size_t res = 0;
     if (!source.is8Bit()) {
-        res = TextEncoder__encodeInto16(source.characters16(), source.length(), destination->vector(), destination->length());
+        res = TextEncoder__encodeInto16(source.characters16(), source.length(), destination->vector(), destination->byteLength());
     } else {
-        res = TextEncoder__encodeInto8(source.characters8(), source.length(), destination->vector(), destination->length());
+        res = TextEncoder__encodeInto8(source.characters8(), source.length(), destination->vector(), destination->byteLength());
     }
 
     Zig::GlobalObject* globalObject = reinterpret_cast<Zig::GlobalObject*>(lexicalGlobalObject);
@@ -384,6 +385,7 @@ static inline JSC::EncodedJSValue jsTextEncoderPrototypeFunction_encodeBody(JSC:
     String str;
     if (input->is8Bit()) {
         if (input->isRope()) {
+            GCDeferralContext gcDeferralContext(vm);
             auto encodedValue = TextEncoder__encodeRopeString(lexicalGlobalObject, input);
             if (!JSC::JSValue::decode(encodedValue).isUndefined()) {
                 RELEASE_AND_RETURN(throwScope, encodedValue);
@@ -416,7 +418,6 @@ static inline JSC::EncodedJSValue jsTextEncoderPrototypeFunction_encodeIntoBody(
     auto throwScope = DECLARE_THROW_SCOPE(vm);
     UNUSED_PARAM(throwScope);
     UNUSED_PARAM(callFrame);
-    auto& impl = castedThis->wrapped();
     if (UNLIKELY(callFrame->argumentCount() < 2))
         return throwVMError(lexicalGlobalObject, throwScope, createNotEnoughArgumentsError(lexicalGlobalObject));
     EnsureStillAliveScope argument0 = callFrame->uncheckedArgument(0);
@@ -431,9 +432,9 @@ static inline JSC::EncodedJSValue jsTextEncoderPrototypeFunction_encodeIntoBody(
 
     size_t res = 0;
     if (!source.is8Bit()) {
-        res = TextEncoder__encodeInto16(source.characters16(), source.length(), destination->vector(), destination->length());
+        res = TextEncoder__encodeInto16(source.characters16(), source.length(), destination->vector(), destination->byteLength());
     } else {
-        res = TextEncoder__encodeInto8(source.characters8(), source.length(), destination->vector(), destination->length());
+        res = TextEncoder__encodeInto8(source.characters8(), source.length(), destination->vector(), destination->byteLength());
     }
 
     Zig::GlobalObject* globalObject = reinterpret_cast<Zig::GlobalObject*>(lexicalGlobalObject);

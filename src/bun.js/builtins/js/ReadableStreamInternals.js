@@ -268,6 +268,9 @@ function readableStreamPipeToWritableStream(
 ) {
   "use strict";
 
+  const isDirectStream = !!@getByIdDirectPrivate(source, "start");
+
+
   @assert(@isReadableStream(source));
   @assert(@isWritableStream(destination));
   @assert(!@isReadableStreamLocked(source));
@@ -605,6 +608,12 @@ function readableStreamTee(stream, shouldClone) {
 
   @assert(@isReadableStream(stream));
   @assert(typeof shouldClone === "boolean");
+
+  var start_ = @getByIdDirectPrivate(stream, "start");
+  if (start_) {
+      @putByIdDirectPrivate(stream, "start", @undefined);
+      start_();
+  }
 
   const reader = new @ReadableStreamDefaultReader(stream);
 
@@ -1611,7 +1620,17 @@ function readableStreamCancel(stream, reason) {
   @readableStreamClose(stream);
 
   var controller = @getByIdDirectPrivate(stream, "readableStreamController");
-  return controller.@cancel(controller, reason).@then(function () {});
+  var cancel = controller.@cancel;
+  if (cancel) {
+    return cancel(controller, reason).@then(function () {});
+  }
+
+  var close = controller.close;
+  if (close) {
+    return @Promise.@resolve(controller.close(reason));
+  }
+
+  @throwTypeError("ReadableStreamController has no cancel or close method");
 }
 
 function readableStreamDefaultControllerCancel(controller, reason) {
@@ -1855,6 +1874,7 @@ function lazyLoadStream(stream, autoAllocateChunkSize) {
     handleResult = function handleResult(result, controller, view) {
       "use strict";
 
+      
       if (result && @isPromise(result)) {
         return result.then(
           handleNativeReadableStreamPromiseResult.bind({
@@ -1863,12 +1883,14 @@ function lazyLoadStream(stream, autoAllocateChunkSize) {
           }),
           (err) => controller.error(err)
         );
-      } else if (result !== false) {
+      } else if (typeof result === 'number') {
         if (view && view.byteLength === result) {
           controller.byobRequest.respondWithNewView(view);
         } else {
           controller.byobRequest.respond(result);
         }
+      } else if (result.constructor === @Uint8Array) {
+        controller.enqueue(result);
       }
 
       if (closer[0] || result === false) {
@@ -1894,6 +1916,7 @@ function lazyLoadStream(stream, autoAllocateChunkSize) {
 
       pull_(controller) {
         closer[0] = false;
+
         var result;
 
         const view = controller.byobRequest.view;
@@ -2088,4 +2111,57 @@ async function readableStreamToArrayDirect(stream, underlyingSource) {
   }
 
   return capability.@promise;
+}
+
+
+function readableStreamDefineLazyIterators(prototype) {
+    "use strict";
+
+    var asyncIterator = globalThis.Symbol.asyncIterator;
+
+    var ReadableStreamAsyncIterator = async function* ReadableStreamAsyncIterator(stream, preventCancel) {
+        var reader = stream.getReader();
+        var deferredError;
+          try {
+              while (true) {
+                  var done, value;
+                  const firstResult = reader.readMany();
+                  if (@isPromise(firstResult)) {
+                      const result = await firstResult;
+                      done = result.done;
+                      value = result.value;
+                  } else {
+                      done = firstResult.done;
+                      value = firstResult.value;
+                  }
+
+                  if (done) {
+                      return;
+                  }
+                  yield* value;
+              }
+          } catch(e) {
+            deferredError = e;
+          } finally {
+            reader.releaseLock();
+
+            if (!preventCancel) {
+                stream.cancel(deferredError);
+            }
+
+            if (deferredError) {
+            throw deferredError;
+          }
+          }
+    };
+
+    var createAsyncIterator = function asyncIterator() {
+        return ReadableStreamAsyncIterator(this, false);
+    };
+    var createValues = function values({preventCancel = false} = {preventCancel: false}) {
+        return ReadableStreamAsyncIterator(this, preventCancel);
+    };
+    @Object.@defineProperty(prototype, asyncIterator, { value: createAsyncIterator });
+    @Object.@defineProperty(prototype, "values", { value: createValues });
+    return prototype;
 }

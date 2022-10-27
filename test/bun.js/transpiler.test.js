@@ -141,22 +141,22 @@ describe("Bun.Transpiler", () => {
       x[x["y"] = 0] = "y";
     })(x || (x = {}));
   })(second = first.second || (first.second = {}));
-})(first || (first = {}))`
+})(first || (first = {}))`;
 
     it("exported inner namespace", () => {
       ts.expectPrinted_(input3, output3);
     });
 
-    const input4 = `export enum x { y }`
+    const input4 = `export enum x { y }`;
     const output4 = `export var x;
 (function(x) {
   x[x["y"] = 0] = "y";
-})(x || (x = {}))`
+})(x || (x = {}))`;
 
     it("exported enum", () => {
       ts.expectPrinted_(input4, output4);
     });
-  })
+  });
 
   describe("exports.replace", () => {
     const transpiler = new Bun.Transpiler({
@@ -316,6 +316,55 @@ describe("Bun.Transpiler", () => {
 
 
   `;
+
+  it("jsxFactory (two level)", () => {
+    var bun = new Bun.Transpiler({
+      loader: "jsx",
+      allowBunRuntime: false,
+      tsconfig: JSON.stringify({
+        compilerOptions: {
+          jsxFragmentFactory: "foo.frag",
+          jsx: "react",
+          jsxFactory: "foo.factory",
+        },
+      }),
+    });
+
+    const element = bun.transformSync(`
+export default <div>hi</div>
+    `);
+
+    expect(element.includes("var jsxEl = foo.factory;")).toBe(true);
+
+    const fragment = bun.transformSync(`
+export default <>hi</>
+    `);
+    expect(fragment.includes("var JSXFrag = foo.frag,")).toBe(true);
+  });
+
+  it("jsxFactory (one level)", () => {
+    var bun = new Bun.Transpiler({
+      loader: "jsx",
+      allowBunRuntime: false,
+      tsconfig: JSON.stringify({
+        compilerOptions: {
+          jsxFragmentFactory: "foo.frag",
+          jsx: "react",
+          jsxFactory: "h",
+        },
+      }),
+    });
+
+    const element = bun.transformSync(`
+export default <div>hi</div>
+    `);
+    expect(element.includes("var jsxEl = h;")).toBe(true);
+
+    const fragment = bun.transformSync(`
+export default <>hi</>
+    `);
+    expect(fragment.includes("var JSXFrag = foo.frag,")).toBe(true);
+  });
 
   it("JSX", () => {
     var bun = new Bun.Transpiler({
@@ -1696,6 +1745,14 @@ class Foo {
 
       expect(out.includes("keepSecondArgument")).toBe(false);
       expect(out.includes("otherNamesStillWork")).toBe(true);
+    });
+
+    it("special identifier in import statement", () => {
+      const out = transpiler.transformSync(`
+        import {ɵtest} from 'foo'
+      `);
+
+      expect(out).toBe("import {ɵtest} from \"foo\";\n");
     });
 
     const importLines = [

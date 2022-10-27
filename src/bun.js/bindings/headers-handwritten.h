@@ -42,6 +42,7 @@ typedef struct SystemError {
     ZigString message;
     ZigString path;
     ZigString syscall;
+    int fd;
 } SystemError;
 
 typedef void* ArrayBufferSink;
@@ -101,6 +102,7 @@ typedef struct ZigException {
     ZigStackTrace stack;
     void* exception;
     bool remapped;
+    int fd;
 } ZigException;
 
 typedef uint8_t JSErrorCode;
@@ -192,7 +194,7 @@ typedef struct {
     uint32_t len;
     uint32_t byte_len;
     uint8_t cell_type;
-    uint64_t _value;
+    int64_t _value;
     bool shared;
 } Bun__ArrayBuffer;
 
@@ -204,7 +206,10 @@ enum SyntheticModuleType : uint64_t {
     Events = 1026,
     StringDecoder = 1027,
     Module = 1028,
+    TTY = 1029,
 };
+
+extern "C" const char* Bun__userAgent;
 
 extern "C" ZigErrorCode Zig_ErrorCodeParserError;
 

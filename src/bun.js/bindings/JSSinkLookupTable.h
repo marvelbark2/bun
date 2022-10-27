@@ -1,4 +1,4 @@
-// Automatically generated from src/bun.js/bindings/JSSink.cpp using /Users/jarred/Code/bun/src/bun.js/WebKit/Source/JavaScriptCore/create_hash_table. DO NOT EDIT!
+// Automatically generated from src/bun.js/bindings/JSSink.cpp using /Users/zhiyuan.guo/Documents/playground/bun/src/bun.js/WebKit/Source/JavaScriptCore/create_hash_table. DO NOT EDIT!
 
 
 
@@ -75,6 +75,84 @@ static const struct HashTableValue JSReadableArrayBufferSinkControllerPrototypeT
 
 static const struct HashTable JSReadableArrayBufferSinkControllerPrototypeTable =
     { 5, 15, false, nullptr, JSReadableArrayBufferSinkControllerPrototypeTableValues, JSReadableArrayBufferSinkControllerPrototypeTableIndex };
+
+
+
+
+
+
+
+static const struct CompactHashIndex JSFileSinkPrototypeTableIndex[19] = {
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { 0, 16 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { 4, -1 },
+    { 1, 17 },
+    { 2, 18 },
+    { 3, -1 },
+};
+
+static const struct HashTableValue JSFileSinkPrototypeTableValues[5] = {
+   { "close"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, FileSink__doClose, 0 } },
+   { "flush"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, FileSink__flush, 1 } },
+   { "end"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, FileSink__end, 0 } },
+   { "start"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, FileSink__start, 1 } },
+   { "write"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, FileSink__write, 1 } },
+};
+
+static const struct HashTable JSFileSinkPrototypeTable =
+    { 5, 15, false, nullptr, JSFileSinkPrototypeTableValues, JSFileSinkPrototypeTableIndex };
+
+
+
+
+
+
+
+static const struct CompactHashIndex JSReadableFileSinkControllerPrototypeTableIndex[19] = {
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { 0, 16 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { -1, -1 },
+    { 4, -1 },
+    { 1, 17 },
+    { 2, 18 },
+    { 3, -1 },
+};
+
+static const struct HashTableValue JSReadableFileSinkControllerPrototypeTableValues[5] = {
+   { "close"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, JSReadableFileSinkController__close, 0 } },
+   { "flush"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, FileSink__flush, 1 } },
+   { "end"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, JSReadableFileSinkController__end, 0 } },
+   { "start"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, FileSink__start, 1 } },
+   { "write"_s, static_cast<unsigned>(PropertyAttribute::ReadOnly|PropertyAttribute::DontDelete|PropertyAttribute::Function), NoIntrinsic, { HashTableValue::NativeFunctionType, FileSink__write, 1 } },
+};
+
+static const struct HashTable JSReadableFileSinkControllerPrototypeTable =
+    { 5, 15, false, nullptr, JSReadableFileSinkControllerPrototypeTableValues, JSReadableFileSinkControllerPrototypeTableIndex };
 
 
 

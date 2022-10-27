@@ -98,6 +98,9 @@ pub const Tag = enum(u8) {
 
     kevent,
     kqueue,
+    epoll_ctl,
+    kill,
+    waitpid,
     pub var strings = std.EnumMap(Tag, JSC.C.JSStringRef).initFull(null);
 };
 const PathString = @import("../../global.zig").PathString;
@@ -562,6 +565,11 @@ pub const Error = struct {
     errno: Int,
     syscall: Syscall.Tag = @intToEnum(Syscall.Tag, 0),
     path: []const u8 = "",
+    fd: i32 = -1,
+
+    pub inline fn isRetry(this: *const Error) bool {
+        return this.getErrno() == .AGAIN;
+    }
 
     pub fn fromCode(errno: os.E, syscall: Syscall.Tag) Error {
         return .{ .errno = @truncate(Int, @enumToInt(errno)), .syscall = syscall };
@@ -588,6 +596,21 @@ pub const Error = struct {
             .errno = this.errno,
             .syscall = this.syscall,
             .path = bun.span(path),
+        };
+    }
+
+    pub inline fn withFd(this: Error, fd: anytype) Error {
+        return Error{
+            .errno = this.errno,
+            .syscall = this.syscall,
+            .fd = @intCast(i32, fd),
+        };
+    }
+
+    pub inline fn withPathLike(this: Error, pathlike: anytype) Error {
+        return switch (pathlike) {
+            .fd => |fd| this.withFd(fd),
+            .path => |path| this.withPath(path.slice()),
         };
     }
 
@@ -619,6 +642,10 @@ pub const Error = struct {
 
         if (this.path.len > 0) {
             err.path = JSC.ZigString.init(this.path);
+        }
+
+        if (this.fd != -1) {
+            err.fd = this.fd;
         }
 
         return err;

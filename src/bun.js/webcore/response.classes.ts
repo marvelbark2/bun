@@ -7,9 +7,11 @@ export default [
     finalize: true,
     klass: {},
     JSType: "0b11101110",
+    estimatedSize: true,
     proto: {
       text: { fn: "getText" },
       json: { fn: "getJSON" },
+      body: { getter: "getBody", cache: true },
       arrayBuffer: { fn: "getArrayBuffer" },
       blob: { fn: "getBlob" },
       clone: { fn: "doClone", length: 1 },
@@ -58,6 +60,7 @@ export default [
     construct: true,
     finalize: true,
     JSType: "0b11101110",
+    estimatedSize: true,
     klass: {
       json: {
         fn: "constructJSON",
@@ -74,6 +77,7 @@ export default [
         getter: "getURL",
         cache: true,
       },
+      body: { getter: "getBody", cache: true },
 
       text: { fn: "getText" },
       json: { fn: "getJSON" },
@@ -88,7 +92,9 @@ export default [
         getter: "getHeaders",
         cache: true,
       },
-
+      redirected: {
+        getter: "getRedirected",
+      },
       statusText: {
         getter: "getStatusText",
         cache: true,
@@ -101,6 +107,34 @@ export default [
       },
       bodyUsed: {
         getter: "getBodyUsed",
+      },
+    },
+  }),
+  define({
+    name: "Blob",
+    construct: true,
+    finalize: true,
+    JSType: "0b11101110",
+    klass: {},
+    proto: {
+      text: { fn: "getText" },
+      json: { fn: "getJSON" },
+      arrayBuffer: { fn: "getArrayBuffer" },
+      slice: { fn: "getSlice", length: 2 },
+      stream: { fn: "getStream", length: 1 },
+
+      type: {
+        getter: "getType",
+        setter: "setType",
+      },
+
+      size: {
+        getter: "getSize",
+      },
+
+      writer: {
+        fn: "getWriter",
+        length: 1,
       },
     },
   }),

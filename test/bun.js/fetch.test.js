@@ -2,25 +2,46 @@ import { it, describe, expect } from "bun:test";
 import fs from "fs";
 import { gc } from "./gc";
 
+const exampleFixture = fs.readFileSync(
+  import.meta.path.substring(0, import.meta.path.lastIndexOf("/")) +
+    "/fetch.js.txt",
+  "utf8"
+);
+
 describe("fetch", () => {
   const urls = ["https://example.com", "http://example.com"];
   for (let url of urls) {
     gc();
     it(url, async () => {
       gc();
-      const response = await fetch(url);
+      const response = await fetch(url, {}, { verbose: true });
       gc();
       const text = await response.text();
       gc();
-      expect(
-        fs.readFileSync(
-          import.meta.path.substring(0, import.meta.path.lastIndexOf("/")) +
-            "/fetch.js.txt",
-          "utf8"
-        )
-      ).toBe(text);
+      expect(exampleFixture).toBe(text);
     });
   }
+});
+
+it("simultaneous HTTPS fetch", async () => {
+  const urls = ["https://example.com", "https://www.example.com"];
+  for (let batch = 0; batch < 4; batch++) {
+    const promises = new Array(20);
+    for (let i = 0; i < 20; i++) {
+      promises[i] = fetch(urls[i % 2]);
+    }
+    const result = await Promise.all(promises);
+    expect(result.length).toBe(20);
+    for (let i = 0; i < 20; i++) {
+      expect(result[i].status).toBe(200);
+      expect(await result[i].text()).toBe(exampleFixture);
+    }
+  }
+});
+
+it("website with tlsextname", async () => {
+  // irony
+  await fetch("https://bun.sh", { method: "HEAD" });
 });
 
 function testBlobInterface(blobbyConstructor, hasBlobFn) {
@@ -144,6 +165,8 @@ function testBlobInterface(blobbyConstructor, hasBlobFn) {
           if (withGC) gc();
           expect(blobed.size).toBe(size);
           if (withGC) gc();
+          blobed.type = "";
+          if (withGC) gc();
           expect(blobed.type).toBe("");
           if (withGC) gc();
           blobed.type = "application/json";
@@ -254,6 +277,50 @@ describe("Blob", () => {
     });
   }
 });
+
+{
+  const sample = new TextEncoder().encode("Hello World!");
+  const typedArrays = [
+    Uint8Array,
+    Uint8ClampedArray,
+    Int8Array,
+    Uint16Array,
+    Int16Array,
+    Uint32Array,
+    Int32Array,
+    Float32Array,
+    Float64Array,
+  ];
+  const Constructors = [Blob, Response, Request];
+
+  for (let withGC of [false, true]) {
+    for (let TypedArray of typedArrays) {
+      for (let Constructor of Constructors) {
+        it(`${Constructor.name} arrayBuffer() with ${TypedArray.name}${
+          withGC ? " with gc" : ""
+        }`, async () => {
+          const data = new TypedArray(sample);
+          if (withGC) gc();
+          const input =
+            Constructor === Blob
+              ? [data]
+              : Constructor === Request
+              ? { body: data }
+              : data;
+          if (withGC) gc();
+          const blob = new Constructor(input);
+          if (withGC) gc();
+          const out = await blob.arrayBuffer();
+          if (withGC) gc();
+          expect(out instanceof ArrayBuffer).toBe(true);
+          if (withGC) gc();
+          expect(out.byteLength).toBe(data.byteLength);
+          if (withGC) gc();
+        });
+      }
+    }
+  }
+}
 
 describe("Response", () => {
   describe("Response.json", () => {

@@ -1,5 +1,5 @@
 import { file, gc, serve } from "bun";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, it, expect } from "bun:test";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
@@ -13,6 +13,23 @@ class TestPass extends Error {
     this.name = "TestPass";
   }
 }
+var count = 200;
+
+it("should work for a file", async () => {
+  const fixture = resolve(import.meta.dir, "./fetch.js.txt");
+  const textToExpect = readFileSync(fixture, "utf-8");
+
+  const server = serve({
+    port: port++,
+    fetch(req) {
+      return new Response(file(fixture));
+    },
+  });
+  const response = await fetch(`http://${server.hostname}:${server.port}`);
+  console.log(response);
+  expect(await response.text()).toBe(textToExpect);
+  server.stop();
+});
 
 describe("streaming", () => {
   describe("error handler", () => {
@@ -39,7 +56,9 @@ describe("streaming", () => {
           },
         });
 
-        const response = await fetch(`http://localhost:${server.port}`);
+        const response = await fetch(
+          `http://${server.hostname}:${server.port}`
+        );
         if (response.status > 0) {
           expect(response.status).toBe(500);
           expect(await response.text()).toBe("fail");
@@ -62,6 +81,8 @@ describe("streaming", () => {
           development: false,
           error(e) {
             pass = false;
+            server?.stop();
+            server = null;
             return new Response("fail", { status: 500 });
           },
 
@@ -77,7 +98,9 @@ describe("streaming", () => {
           },
         });
 
-        const response = await fetch(`http://localhost:${server.port}`);
+        const response = await fetch(
+          `http://${server.hostname}:${server.port}`
+        );
         // connection terminated
         if (response.status > 0) {
           expect(response.status).toBe(200);
@@ -110,7 +133,7 @@ describe("streaming", () => {
       },
     });
 
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     const text = await response.text();
     expect(text.length).toBe(textToExpect.length);
     expect(text).toBe(textToExpect);
@@ -134,7 +157,7 @@ describe("streaming", () => {
         );
       },
     });
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     expect(await response.text()).toBe(textToExpect);
     server.stop();
   });
@@ -157,9 +180,18 @@ describe("streaming", () => {
         },
       });
 
-      const response = await fetch(`http://localhost:${server.port}`);
-      console.log("here");
-      expect(response.status).toBe(500);
+      var response;
+      try {
+        response = await fetch(`http://${server.hostname}:${server.port}`);
+      } catch (e) {
+        if (e.name !== "ConnectionClosed") {
+          throw e;
+        }
+      }
+
+      if (response) {
+        expect(response.status).toBe(500);
+      }
     } catch (e) {
       if (!e || !(e instanceof TestPass)) {
         throw e;
@@ -174,28 +206,32 @@ describe("streaming", () => {
     var server;
     try {
       var pass = false;
+      var err = { name: '', message: '' };
       server = serve({
         port: port++,
         development: false,
         error(e) {
           pass = true;
+          err = e;
           return new Response("Fail", { status: 500 });
         },
         fetch(req) {
           return new Response(
             new ReadableStream({
               start(controller) {
-                throw new Error("error");
+                throw new TypeError("error");
               },
             })
           );
         },
       });
 
-      const response = await fetch(`http://localhost:${server.port}`);
+      const response = await fetch(`http://${server.hostname}:${server.port}`);
       expect(response.status).toBe(500);
       expect(await response.text()).toBe("Fail");
       expect(pass).toBe(true);
+      expect(err.name).toBe("TypeError");
+      expect(err.message).toBe("error");
     } catch (e) {
       throw e;
     } finally {
@@ -223,7 +259,7 @@ describe("streaming", () => {
         );
       },
     });
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     expect(await response.text()).toBe(textToExpect);
     server.stop();
   });
@@ -245,7 +281,7 @@ describe("streaming", () => {
         );
       },
     });
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     const text = await response.text();
     expect(text).toBe(textToExpect);
     server.stop();
@@ -271,7 +307,7 @@ describe("streaming", () => {
         );
       },
     });
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     expect(await response.text()).toBe(textToExpect);
     server.stop();
   });
@@ -296,7 +332,7 @@ describe("streaming", () => {
         );
       },
     });
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     expect(await response.text()).toBe(textToExpect);
     server.stop();
   });
@@ -325,7 +361,7 @@ describe("streaming", () => {
         );
       },
     });
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     expect(await response.text()).toBe(textToExpect);
     server.stop();
   });
@@ -338,7 +374,7 @@ it("should work for a hello world", async () => {
       return new Response(`Hello, world!`);
     },
   });
-  const response = await fetch(`http://localhost:${server.port}`);
+  const response = await fetch(`http://${server.hostname}:${server.port}`);
   expect(await response.text()).toBe("Hello, world!");
   server.stop();
 });
@@ -353,7 +389,7 @@ it("should work for a blob", async () => {
       return new Response(new Blob([textToExpect]));
     },
   });
-  const response = await fetch(`http://localhost:${server.port}`);
+  const response = await fetch(`http://${server.hostname}:${server.port}`);
   expect(await response.text()).toBe(textToExpect);
   server.stop();
 });
@@ -368,22 +404,7 @@ it("should work for a blob stream", async () => {
       return new Response(new Blob([textToExpect]).stream());
     },
   });
-  const response = await fetch(`http://localhost:${server.port}`);
-  expect(await response.text()).toBe(textToExpect);
-  server.stop();
-});
-
-it("should work for a file", async () => {
-  const fixture = resolve(import.meta.dir, "./fetch.js.txt");
-  const textToExpect = readFileSync(fixture, "utf-8");
-
-  const server = serve({
-    port: port++,
-    fetch(req) {
-      return new Response(file(fixture));
-    },
-  });
-  const response = await fetch(`http://localhost:${server.port}`);
+  const response = await fetch(`http://${server.hostname}:${server.port}`);
   expect(await response.text()).toBe(textToExpect);
   server.stop();
 });
@@ -398,7 +419,7 @@ it("should work for a file stream", async () => {
       return new Response(file(fixture).stream());
     },
   });
-  const response = await fetch(`http://localhost:${server.port}`);
+  const response = await fetch(`http://${server.hostname}:${server.port}`);
   expect(await response.text()).toBe(textToExpect);
   server.stop();
 });
@@ -417,7 +438,7 @@ it("fetch should work with headers", async () => {
       });
     },
   });
-  const response = await fetch(`http://localhost:${server.port}`, {
+  const response = await fetch(`http://${server.hostname}:${server.port}`, {
     headers: {
       "X-Foo": "bar",
     },
@@ -428,7 +449,6 @@ it("fetch should work with headers", async () => {
   server.stop();
 });
 
-var count = 200;
 it(`should work for a file ${count} times serial`, async () => {
   const fixture = resolve(import.meta.dir, "./fetch.js.txt");
   const textToExpect = readFileSync(fixture, "utf-8");
@@ -440,40 +460,14 @@ it(`should work for a file ${count} times serial`, async () => {
     },
   });
 
-  // this gets stuck if run about 200 times awaiting all the promises
-  // when the promises are run altogether, instead of one at a time
-  // it's hard to say if this only happens here due to some weird stuff with the test runner
-  // or if it's "real" issue
   for (let i = 0; i < count; i++) {
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     expect(await response.text()).toBe(textToExpect);
   }
 
   server.stop();
 });
 
-var count = 50;
-it(`should work for text ${count} times serial`, async () => {
-  const textToExpect = "hello";
-  var ran = 0;
-  const server = serve({
-    port: port++,
-    fetch(req) {
-      return new Response(textToExpect);
-    },
-  });
-
-  // this gets stuck if run about 200 times awaiting all the promises
-  // when the promises are run altogether, instead of one at a time
-  // it's hard to say if this only happens here due to some weird stuff with the test runner
-  // or if it's "real" issue
-  for (let i = 0; i < count; i++) {
-    const response = await fetch(`http://localhost:${server.port}`);
-    expect(await response.text()).toBe(textToExpect);
-  }
-
-  server.stop();
-});
 it(`should work for ArrayBuffer ${count} times serial`, async () => {
   const textToExpect = "hello";
   var ran = 0;
@@ -484,14 +478,84 @@ it(`should work for ArrayBuffer ${count} times serial`, async () => {
     },
   });
 
-  // this gets stuck if run about 200 times awaiting all the promises
-  // when the promises are run altogether, instead of one at a time
-  // it's hard to say if this only happens here due to some weird stuff with the test runner
-  // or if it's "real" issue
   for (let i = 0; i < count; i++) {
-    const response = await fetch(`http://localhost:${server.port}`);
+    const response = await fetch(`http://${server.hostname}:${server.port}`);
     expect(await response.text()).toBe(textToExpect);
   }
 
+  server.stop();
+});
+
+describe("parallell", () => {
+  it(`should work for text ${count} times in batches of 5`, async () => {
+    const textToExpect = "hello";
+    var ran = 0;
+    const server = serve({
+      port: port++,
+      fetch(req) {
+        return new Response(textToExpect);
+      },
+    });
+
+    for (let i = 0; i < count; ) {
+      let responses = await Promise.all([
+        fetch(`http://${server.hostname}:${server.port}`),
+        fetch(`http://${server.hostname}:${server.port}`),
+        fetch(`http://${server.hostname}:${server.port}`),
+        fetch(`http://${server.hostname}:${server.port}`),
+        fetch(`http://${server.hostname}:${server.port}`),
+      ]);
+
+      for (let response of responses) {
+        expect(await response.text()).toBe(textToExpect);
+      }
+      i += responses.length;
+    }
+
+    server.stop();
+  });
+  it(`should work for Uint8Array ${count} times in batches of 5`, async () => {
+    const textToExpect = "hello";
+    var ran = 0;
+    const server = serve({
+      port: port++,
+      fetch(req) {
+        return new Response(new TextEncoder().encode(textToExpect));
+      },
+    });
+
+    for (let i = 0; i < count; ) {
+      let responses = await Promise.all([
+        fetch(`http://${server.hostname}:${server.port}`),
+        fetch(`http://${server.hostname}:${server.port}`),
+        fetch(`http://${server.hostname}:${server.port}`),
+        fetch(`http://${server.hostname}:${server.port}`),
+        fetch(`http://${server.hostname}:${server.port}`),
+      ]);
+
+      for (let response of responses) {
+        expect(await response.text()).toBe(textToExpect);
+      }
+      i += responses.length;
+    }
+
+    server.stop();
+  });
+});
+
+it("should support reloading", async () => {
+  const first = (req) => new Response("first");
+  const second = (req) => new Response("second");
+
+  const server = serve({
+    port: port++,
+    fetch: first,
+  });
+
+  const response = await fetch(`http://${server.hostname}:${server.port}`);
+  expect(await response.text()).toBe("first");
+  server.reload({ fetch: second });
+  const response2 = await fetch(`http://${server.hostname}:${server.port}`);
+  expect(await response2.text()).toBe("second");
   server.stop();
 });

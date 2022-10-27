@@ -690,6 +690,19 @@ pub fn NewPrinter(
                 p.printIndent();
             }
 
+            if (import.default_name) |default| {
+                p.print("var ");
+                p.printSymbol(default.ref.?);
+                if (comptime Statement == void) {
+                    p.print(" = ");
+                    p.printRequireOrImportExpr(import.import_record_index, &.{}, Level.lowest, ExprFlag.None());
+                } else {
+                    p.print(" = ");
+                    p.print(statement);
+                }
+                p.printSemicolonAfterStatement();
+            }
+
             if (import.items.len > 0) {
                 p.print("var ");
                 p.print("{ ");
@@ -698,13 +711,6 @@ pub fn NewPrinter(
                     p.print("\n");
                     p.options.indent += 1;
                     p.printIndent();
-                }
-
-                if (import.default_name) |default_name| {
-                    p.print("default:");
-                    p.printSpaceBeforeIdentifier();
-                    p.printSymbol(default_name.ref.?);
-                    p.print(", ");
                 }
 
                 for (import.items) |item, i| {
@@ -728,7 +734,7 @@ pub fn NewPrinter(
                     p.printSpace();
                 }
 
-                if (import.star_name_loc == null) {
+                if (import.star_name_loc == null and import.default_name == null) {
                     if (comptime Statement == void) {
                         p.print("} = ");
                         p.printRequireOrImportExpr(import.import_record_index, &.{}, Level.lowest, ExprFlag.None());
@@ -736,23 +742,16 @@ pub fn NewPrinter(
                         p.print("} = ");
                         p.print(statement);
                     }
+                } else if (import.default_name) |name| {
+                    p.print("} =");
+                    p.printSpaceBeforeIdentifier();
+                    p.printSymbol(name.ref.?);
                 } else {
                     p.print("} =");
                     p.printSpaceBeforeIdentifier();
                     p.printSymbol(import.namespace_ref);
                 }
 
-                p.printSemicolonAfterStatement();
-            } else if (import.default_name) |default| {
-                p.print("var ");
-                p.printSymbol(default.ref.?);
-                if (comptime Statement == void) {
-                    p.print(" = ");
-                    p.printRequireOrImportExpr(import.import_record_index, &.{}, Level.lowest, ExprFlag.None());
-                } else {
-                    p.print(" = ");
-                    p.print(statement);
-                }
                 p.printSemicolonAfterStatement();
             }
         }
@@ -881,7 +880,7 @@ pub fn NewPrinter(
             p.printIdentifier(name);
         }
         pub fn printClauseAlias(p: *Printer, alias: string) void {
-            if (p.canPrintIdentifier(alias)) {
+            if (!strings.containsNonBmpCodePoint(alias)) {
                 p.printSpaceBeforeIdentifier();
                 p.printIdentifier(alias);
             } else {
@@ -1401,6 +1400,27 @@ pub fn NewPrinter(
 
             assert(p.import_records.len > import_record_index);
             const record = p.import_records[import_record_index];
+
+            if (comptime is_bun_platform) {
+                // "bun" is not a real module. It's just globalThis.Bun.
+                //
+                //  transform from:
+                //      const foo = await import("bun")
+                //      const bar = require("bun")
+                //
+                //  transform to:
+                //      const foo = await Promise.resolve(globalThis.Bun)
+                //      const bar = globalThis.Bun
+                //
+                if (record.tag == .bun) {
+                    if (record.kind == .dynamic) {
+                        p.print("Promise.resolve(globalThis.Bun)");
+                    } else if (record.kind == .require) {
+                        p.print("globalThis.Bun");
+                    }
+                    return;
+                }
+            }
 
             const is_external = std.mem.indexOfScalar(
                 u32,
@@ -2064,17 +2084,7 @@ pub fn NewPrinter(
                     p.print("`");
                 },
                 .e_reg_exp => |e| {
-                    const n = p.writer.written;
-
-                    // Avoid forming a single-line comment
-                    if (n > 0 and p.writer.prevChar() == '/') {
-                        p.print(" ");
-                    }
-
-                    p.print(e.value);
-
-                    // Need a space before the next identifier to avoid it turning into flags
-                    p.prev_reg_exp_end = p.writer.written;
+                    p.printRegExpLiteral(e);
                 },
                 .e_big_int => |e| {
                     p.printSpaceBeforeIdentifier();
@@ -2469,6 +2479,44 @@ pub fn NewPrinter(
                 p.printQuotedUTF8(namespace.alias, true);
                 p.print("]");
             }
+        }
+
+        pub fn printRegExpLiteral(p: *Printer, e: *const E.RegExp) void {
+            const n = p.writer.written;
+
+            // Avoid forming a single-line comment
+            if (n > 0 and p.writer.prevChar() == '/') {
+                p.print(" ");
+            }
+
+            if (comptime is_bun_platform) {
+                if (e.value.len > 2 and e.usesLookBehindAssertion()) {
+                    p.print("(new globalThis.Bun.OnigurumaRegExp(");
+                    const pattern = e.pattern();
+                    const flags = e.flags();
+                    std.debug.assert(pattern.len > 0);
+                    var buf = bun.default_allocator.alloc(u16, strings.elementLengthUTF8IntoUTF16([]const u8, pattern)) catch unreachable;
+                    defer bun.default_allocator.free(buf);
+                    const buf_len = std.unicode.utf8ToUtf16Le(buf, pattern) catch unreachable;
+                    std.debug.assert(buf_len == buf.len);
+                    const q = p.bestQuoteCharForString(buf, true);
+                    p.print(q);
+                    p.printQuotedUTF16(buf, q);
+                    p.print(q);
+                    if (flags.len > 0) {
+                        p.print(", ");
+                        p.printQuotedUTF8(flags, true);
+                    }
+                    p.print("))");
+                } else {
+                    p.print(e.value);
+                }
+            } else {
+                p.print(e.value);
+            }
+
+            // Need a space before the next identifier to avoid it turning into flags
+            p.prev_reg_exp_end = p.writer.written;
         }
 
         pub fn printProperty(p: *Printer, item: G.Property) void {
@@ -4851,6 +4899,7 @@ pub const BufferWriter = struct {
     written: []u8 = "",
     sentinel: [:0]u8 = "",
     append_null_byte: bool = false,
+    append_newline: bool = false,
     approximate_newline_count: usize = 0,
 
     pub fn getWritten(this: *BufferWriter) []u8 {
@@ -4915,6 +4964,11 @@ pub const BufferWriter = struct {
     pub fn done(
         ctx: *BufferWriter,
     ) anyerror!void {
+        if (ctx.append_newline) {
+            ctx.append_newline = false;
+            try ctx.buffer.appendChar('\n');
+        }
+
         if (ctx.append_null_byte) {
             ctx.sentinel = ctx.buffer.toOwnedSentinelLeaky();
             ctx.written = ctx.buffer.toOwnedSliceLeaky();

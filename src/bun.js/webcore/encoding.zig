@@ -68,7 +68,7 @@ pub const TextEncoder = struct {
             std.debug.assert(result.read == slice.len);
             const array_buffer = uint8array.asArrayBuffer(globalThis).?;
             std.debug.assert(result.written == array_buffer.len);
-            @memcpy(array_buffer.slice().ptr, &buf, result.written);
+            @memcpy(array_buffer.byteSlice().ptr, &buf, result.written);
             return uint8array;
         } else {
             const bytes = strings.allocateLatin1IntoUTF8(globalThis.bunVM().allocator, []const u8, slice) catch {
@@ -767,13 +767,14 @@ pub const Encoder = struct {
         return switch (@intToEnum(JSC.Node.Encoding, encoding)) {
             .ucs2 => toString(input, len, globalObject, .utf16le),
             .utf16le => toString(input, len, globalObject, .utf16le),
-            .buffer => toString(input, len, globalObject, .utf8),
             .utf8 => toString(input, len, globalObject, .utf8),
             .ascii => toString(input, len, globalObject, .ascii),
             .hex => toString(input, len, globalObject, .hex),
             .base64 => toString(input, len, globalObject, .base64),
             .base64url => toString(input, len, globalObject, .base64url),
-            else => unreachable,
+
+            // treat everything else as utf8
+            else => toString(input, len, globalObject, .utf8),
         };
     }
 
@@ -821,7 +822,7 @@ pub const Encoder = struct {
             },
             .ucs2, .utf16le => {
                 var output = allocator.alloc(u16, len / 2) catch return ZigString.init("Out of memory").toErrorInstance(global);
-                var i : usize = 0;
+                var i: usize = 0;
                 while (i < len / 2) : (i += 1) {
                     output[i] = (@intCast(u16, input[2 * i + 1]) << 8) + @intCast(u16, input[2 * i]);
                 }

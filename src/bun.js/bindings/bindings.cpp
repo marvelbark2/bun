@@ -76,6 +76,7 @@
 #include "wtf/text/AtomString.h"
 #include "HTTPHeaderNames.h"
 #include "JSDOMPromiseDeferred.h"
+#include "JavaScriptCore/TestRunnerUtils.h"
 
 template<typename UWSResponse>
 static void copyToUWS(WebCore::FetchHeaders* headers, UWSResponse* res)
@@ -134,8 +135,7 @@ void WebCore__FetchHeaders__toUWSResponse(WebCore__FetchHeaders* arg0, bool is_s
 
 WebCore__FetchHeaders* WebCore__FetchHeaders__createEmpty()
 {
-    RefPtr<WebCore::FetchHeaders> headers = adoptRef(*new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} }));
-    return headers.leakRef();
+    return new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} });
 }
 void WebCore__FetchHeaders__append(WebCore__FetchHeaders* headers, const ZigString* arg1, const ZigString* arg2)
 {
@@ -155,10 +155,10 @@ WebCore__FetchHeaders* WebCore__FetchHeaders__createFromJS(JSC__JSGlobalObject* 
     auto throwScope = DECLARE_THROW_SCOPE(lexicalGlobalObject->vm());
     auto init = argument0.value().isUndefined() ? std::optional<Converter<IDLUnion<IDLSequence<IDLSequence<IDLByteString>>, IDLRecord<IDLByteString, IDLByteString>>>::ReturnType>() : std::optional<Converter<IDLUnion<IDLSequence<IDLSequence<IDLByteString>>, IDLRecord<IDLByteString, IDLByteString>>>::ReturnType>(convert<IDLUnion<IDLSequence<IDLSequence<IDLByteString>>, IDLRecord<IDLByteString, IDLByteString>>>(*lexicalGlobalObject, argument0.value()));
     RETURN_IF_EXCEPTION(throwScope, nullptr);
-    RefPtr<WebCore::FetchHeaders> headers = adoptRef(*new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} }));
+    auto* headers = new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} });
     if (init)
         headers->fill(WTFMove(init.value()));
-    return headers.leakRef();
+    return headers;
 }
 
 JSC__JSValue WebCore__FetchHeaders__toJS(WebCore__FetchHeaders* headers, JSC__JSGlobalObject* lexicalGlobalObject)
@@ -170,19 +170,16 @@ JSC__JSValue WebCore__FetchHeaders__toJS(WebCore__FetchHeaders* headers, JSC__JS
 JSC__JSValue WebCore__FetchHeaders__clone(WebCore__FetchHeaders* headers, JSC__JSGlobalObject* arg1)
 {
     Zig::GlobalObject* globalObject = reinterpret_cast<Zig::GlobalObject*>(arg1);
-    auto clone = WebCore::FetchHeaders::create();
+    auto* clone = new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} });
     clone->fill(*headers);
     return JSC::JSValue::encode(WebCore::toJSNewlyCreated(arg1, globalObject, WTFMove(clone)));
 }
 
 WebCore__FetchHeaders* WebCore__FetchHeaders__cloneThis(WebCore__FetchHeaders* headers)
 {
-    RefPtr<WebCore::FetchHeaders> clone = adoptRef(*new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} }));
-    if (headers->size() > 0) {
-        clone->fill(*headers);
-    }
-
-    return clone.leakRef();
+    auto* clone = new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} });
+    clone->fill(*headers);
+    return clone;
 }
 
 bool WebCore__FetchHeaders__fastHas_(WebCore__FetchHeaders* arg0, unsigned char HTTPHeaderName1)
@@ -218,92 +215,98 @@ void WebCore__FetchHeaders__count(WebCore__FetchHeaders* headers, uint32_t* coun
     *count = headers->size();
     *buf_len = i;
 }
+
+typedef struct ZigSliceString {
+    const unsigned char* ptr;
+    size_t len;
+} ZigSliceString;
+
 typedef struct PicoHTTPHeader {
-    unsigned const char* name;
-    size_t name_len;
-    unsigned const char* value;
-    size_t value_len;
+    ZigSliceString name;
+    ZigSliceString value;
 } PicoHTTPHeader;
 
 typedef struct PicoHTTPHeaders {
     const PicoHTTPHeader* ptr;
     size_t len;
 } PicoHTTPHeaders;
-WebCore::FetchHeaders* WebCore__FetchHeaders__createFromPicoHeaders_(JSC__JSGlobalObject* arg0, const void* arg1)
+
+WebCore::FetchHeaders* WebCore__FetchHeaders__createFromPicoHeaders_(const void* arg1)
 {
     PicoHTTPHeaders pico_headers = *reinterpret_cast<const PicoHTTPHeaders*>(arg1);
-    RefPtr<WebCore::FetchHeaders> headers = adoptRef(*new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} }));
+    auto* headers = new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} });
 
     if (pico_headers.len > 0) {
-        Vector<KeyValuePair<String, String>> pairs;
-        pairs.reserveCapacity(pico_headers.len);
-        for (size_t i = 0; i < pico_headers.len; i++) {
-            WTF::String name = WTF::String(pico_headers.ptr[i].name, pico_headers.ptr[i].name_len);
-            WTF::String value = WTF::String(pico_headers.ptr[i].value, pico_headers.ptr[i].value_len);
-            pairs.uncheckedAppend(KeyValuePair<String, String>(name, value));
-        }
-        headers->fill(WebCore::FetchHeaders::Init(WTFMove(pairs)));
-        pairs.releaseBuffer();
-    }
+        HTTPHeaderMap map = HTTPHeaderMap();
 
-    return headers.leakRef();
+        size_t end = pico_headers.len;
+
+        for (size_t j = 0; j < end; j++) {
+            PicoHTTPHeader header = pico_headers.ptr[j];
+            if (header.value.len == 0)
+                continue;
+
+            StringView nameView = StringView(reinterpret_cast<const char*>(header.name.ptr), header.name.len);
+
+            LChar* data = nullptr;
+            auto value = String::createUninitialized(header.value.len, data);
+            memcpy(data, header.value.ptr, header.value.len);
+
+            HTTPHeaderName name;
+
+            // memory safety: the header names must be cloned if they're not statically known
+            // the value must also be cloned
+            // isolatedCopy() doesn't actually clone, it's only for threadlocal isolation
+            if (WebCore::findHTTPHeaderName(nameView, name)) {
+                map.add(name, value);
+            } else {
+                // the case where we do not need to clone the name
+                // when the header name is already present in the list
+                // we don't have that information here, so map.setUncommonHeaderCloneName exists
+                map.setUncommonHeaderCloneName(nameView, value);
+            }
+        }
+
+        headers->setInternalHeaders(WTFMove(map));
+    }
+    return headers;
 }
 WebCore::FetchHeaders* WebCore__FetchHeaders__createFromUWS(JSC__JSGlobalObject* arg0, void* arg1)
 {
     uWS::HttpRequest req = *reinterpret_cast<uWS::HttpRequest*>(arg1);
-    std::bitset<255> seenHeaderSizes;
-    // uWebSockets limits to 50 headers
-    uint32_t nameHashes[55];
     size_t i = 0;
 
-    RefPtr<WebCore::FetchHeaders> headers = adoptRef(*new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} }));
+    auto* headers = new WebCore::FetchHeaders({ WebCore::FetchHeaders::Guard::None, {} });
     HTTPHeaderMap map = HTTPHeaderMap();
 
     for (const auto& header : req) {
         StringView nameView = StringView(reinterpret_cast<const LChar*>(header.first.data()), header.first.length());
-
-        uint32_t hash = nameView.hash();
-        nameHashes[i++] = hash;
         size_t name_len = nameView.length();
-        auto value = WTF::StringView(reinterpret_cast<const LChar*>(header.second.data()), header.second.length()).toStringWithoutCopying().isolatedCopy();
 
-        if (name_len < 255) {
-            if (seenHeaderSizes[name_len]) {
-                bool found = false;
-                for (size_t j = 0; j < i; j++) {
-                    if (nameHashes[j] == hash) {
-                        map.add(nameView.toString(), WTF::String(WTF::StringImpl::createWithoutCopying(header.second.data(), header.second.length())));
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (found)
-                    continue;
-            } else {
-                seenHeaderSizes.set(name_len);
-            }
-        } else {
-            map.add(nameView.toString(), value);
-            continue;
-        }
+        LChar* data = nullptr;
+        auto value = String::createUninitialized(header.second.length(), data);
+        memcpy(data, header.second.data(), header.second.length());
 
         HTTPHeaderName name;
 
         if (WebCore::findHTTPHeaderName(nameView, name)) {
-            map.add(name, value);
+            map.add(name, WTFMove(value));
         } else {
-            map.setUncommonHeader(nameView.toString().isolatedCopy(), value);
+            map.setUncommonHeader(nameView.toString().isolatedCopy(), WTFMove(value));
         }
+
+        // seenHeaderSizes[name_len] = true;
+
+        if (i > 56)
+            __builtin_unreachable();
     }
 
     headers->setInternalHeaders(WTFMove(map));
-    return headers.leakRef();
+    return headers;
 }
 void WebCore__FetchHeaders__deref(WebCore__FetchHeaders* arg0)
 {
-    RefPtr<WebCore::FetchHeaders> clone = arg0;
-    clone->deref();
+    arg0->deref();
 }
 
 JSC__JSValue WebCore__FetchHeaders__createValue(JSC__JSGlobalObject* arg0, StringPointer* arg1, StringPointer* arg2, const ZigString* arg3, uint32_t count)
@@ -411,6 +414,12 @@ JSC__JSValue SystemError__toErrorInstance(const SystemError* arg0,
     if (err.path.len > 0) {
         JSC::JSValue path = JSC::JSValue(Zig::toJSStringGC(err.path, globalObject));
         result->putDirect(vm, clientData->builtinNames().pathPublicName(), path,
+            JSC::PropertyAttribute::DontDelete | 0);
+    }
+
+    if (err.fd != -1) {
+        JSC::JSValue fd = JSC::JSValue(jsNumber(err.fd));
+        result->putDirect(vm, JSC::Identifier::fromString(vm, "fd"_s), fd,
             JSC::PropertyAttribute::DontDelete | 0);
     }
 
@@ -559,6 +568,13 @@ JSC__JSValue JSC__JSValue__createInternalPromise(JSC__JSGlobalObject* globalObje
         JSC::JSValue(JSC::JSInternalPromise::create(vm, globalObject->internalPromiseStructure())));
 }
 
+void JSC__JSFunction__optimizeSoon(JSC__JSValue JSValue0)
+{
+    JSC::JSValue value = JSC::JSValue::decode(JSValue0);
+
+    JSC::optimizeNextInvocation(value);
+}
+
 void JSC__JSValue__jsonStringify(JSC__JSValue JSValue0, JSC__JSGlobalObject* arg1, uint32_t arg2,
     ZigString* arg3)
 {
@@ -642,6 +658,17 @@ void JSC__JSGlobalObject__deleteModuleRegistryEntry(JSC__JSGlobalObject* global,
 
     map->remove(global, val);
 }
+
+void JSC__VM__collectAsync(JSC__VM* vm)
+{
+    vm->heap.collectAsync();
+}
+
+size_t JSC__VM__heapSize(JSC__VM* arg0)
+{
+    return arg0->heap.size();
+}
+
 // This is very naive!
 JSC__JSInternalPromise* JSC__VM__reloadModule(JSC__VM* vm, JSC__JSGlobalObject* arg1,
     ZigString arg2)
@@ -815,6 +842,11 @@ unsigned char JSC__JSCell__getType(JSC__JSCell* arg0) { return arg0->type(); }
 
 #pragma mark - JSC::JSString
 
+void JSC__JSString__toZigString(JSC__JSString* arg0, JSC__JSGlobalObject* arg1, ZigString* arg2)
+{
+    *arg2 = Zig::toZigString(arg0->value(arg1));
+}
+
 JSC__JSString* JSC__JSString__createFromOwnedString(JSC__VM* arg0, const WTF__String* arg1)
 {
     return JSC::jsOwnedString(reinterpret_cast<JSC__VM&>(arg0),
@@ -874,11 +906,12 @@ bool JSC__JSModuleLoader__checkSyntax(JSC__JSGlobalObject* arg0, const JSC__Sour
     return result;
 }
 JSC__JSValue JSC__JSModuleLoader__evaluate(JSC__JSGlobalObject* globalObject, const unsigned char* arg1,
-    size_t arg2, const unsigned char* arg3, size_t arg4,
+    size_t arg2, const unsigned char* originUrlPtr, size_t originURLLen, const unsigned char* referrerUrlPtr, size_t referrerUrlLen,
     JSC__JSValue JSValue5, JSC__JSValue* arg6)
 {
     WTF::String src = WTF::String::fromUTF8(arg1, arg2).isolatedCopy();
-    WTF::URL origin = WTF::URL::fileURLWithFileSystemPath(WTF::String(WTF::StringImpl::createWithoutCopying(arg3, arg4))).isolatedCopy();
+    WTF::URL origin = WTF::URL::fileURLWithFileSystemPath(WTF::String::fromUTF8(originUrlPtr, originURLLen)).isolatedCopy();
+    WTF::URL referrer = WTF::URL::fileURLWithFileSystemPath(WTF::String::fromUTF8(referrerUrlPtr, referrerUrlLen)).isolatedCopy();
 
     JSC::VM& vm = globalObject->vm();
 
@@ -886,7 +919,7 @@ JSC__JSValue JSC__JSModuleLoader__evaluate(JSC__JSGlobalObject* globalObject, co
         src, JSC::SourceOrigin { origin }, origin.fileSystemPath(),
         WTF::TextPosition(), JSC::SourceProviderSourceType::Module);
     globalObject->moduleLoader()->provideFetch(globalObject, jsString(vm, origin.fileSystemPath()), WTFMove(sourceCode));
-    auto* promise = JSC::importModule(globalObject, JSC::Identifier::fromString(vm, origin.fileSystemPath()), JSValue(), JSValue());
+    auto* promise = JSC::importModule(globalObject, JSC::Identifier::fromString(vm, origin.fileSystemPath()), JSValue(jsString(vm, referrer.fileSystemPath())), JSValue(), JSValue());
 
     auto scope = DECLARE_THROW_SCOPE(vm);
 
@@ -906,7 +939,7 @@ JSC__JSValue JSC__JSModuleLoader__evaluate(JSC__JSGlobalObject* globalObject, co
 JSC__JSInternalPromise* JSC__JSModuleLoader__importModule(JSC__JSGlobalObject* arg0,
     const JSC__Identifier* arg1)
 {
-    return JSC::importModule(arg0, *arg1, JSC::JSValue {}, JSC::JSValue {});
+    return JSC::importModule(arg0, *arg1, JSC::JSValue {}, JSC::JSValue {}, JSC::JSValue {});
 }
 JSC__JSValue JSC__JSModuleLoader__linkAndEvaluateModule(JSC__JSGlobalObject* arg0,
     const JSC__Identifier* arg1)
@@ -1031,16 +1064,30 @@ bool JSC__JSValue__asArrayBuffer_(JSC__JSValue JSValue0, JSC__JSGlobalObject* ar
         return false;
     }
 
-    switch (value.asCell()->type()) {
-    case JSC::JSType::Uint8ArrayType: {
-        JSC::JSUint8Array* typedArray = JSC::jsCast<JSC::JSUint8Array*>(value);
+    auto type = value.asCell()->type();
+
+    switch (type) {
+    case JSC::JSType::Uint8ArrayType:
+    case JSC::JSType::Int8ArrayType:
+    case JSC::JSType::DataViewType:
+    case JSC::JSType::Uint8ClampedArrayType:
+    case JSC::JSType::Int16ArrayType:
+    case JSC::JSType::Uint16ArrayType:
+    case JSC::JSType::Int32ArrayType:
+    case JSC::JSType::Uint32ArrayType:
+    case JSC::JSType::Float32ArrayType:
+    case JSC::JSType::Float64ArrayType:
+    case JSC::JSType::BigInt64ArrayType:
+    case JSC::JSType::BigUint64ArrayType: {
+        JSC::JSArrayBufferView* typedArray = JSC::jsCast<JSC::JSArrayBufferView*>(value);
         arg2->len = typedArray->length();
         arg2->byte_len = typedArray->byteLength();
         // the offset is already set by vector()
         // https://github.com/oven-sh/bun/issues/561
         arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Uint8ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
+        arg2->cell_type = type;
+        arg2->ptr = (char*)typedArray->vectorWithoutPACValidation();
+        arg2->_value = JSValue::encode(value);
         return true;
     }
     case JSC::JSType::ArrayBufferType: {
@@ -1051,127 +1098,7 @@ bool JSC__JSValue__asArrayBuffer_(JSC__JSValue JSValue0, JSC__JSGlobalObject* ar
         arg2->cell_type = JSC::JSType::ArrayBufferType;
         arg2->ptr = (char*)typedArray->data();
         arg2->shared = typedArray->isShared();
-        return true;
-    }
-    case JSC::JSType::Int8ArrayType: {
-        JSC::JSInt8Array* typedArray = JSC::jsCast<JSC::JSInt8Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Int8ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::DataViewType: {
-        JSC::JSDataView* typedArray = JSC::jsCast<JSC::JSDataView*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::DataViewType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::Uint8ClampedArrayType: {
-        JSC::JSUint8ClampedArray* typedArray = JSC::jsCast<JSC::JSUint8ClampedArray*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Uint8ClampedArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::Int16ArrayType: {
-        JSC::JSInt16Array* typedArray = JSC::jsCast<JSC::JSInt16Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Int16ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::Uint16ArrayType: {
-        JSC::JSUint16Array* typedArray = JSC::jsCast<JSC::JSUint16Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Uint16ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::Int32ArrayType: {
-        JSC::JSInt32Array* typedArray = JSC::jsCast<JSC::JSInt32Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Int32ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::Uint32ArrayType: {
-        JSC::JSUint32Array* typedArray = JSC::jsCast<JSC::JSUint32Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Uint32ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::Float32ArrayType: {
-        JSC::JSFloat32Array* typedArray = JSC::jsCast<JSC::JSFloat32Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Float32ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::Float64ArrayType: {
-        JSC::JSFloat64Array* typedArray = JSC::jsCast<JSC::JSFloat64Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::Float64ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::BigInt64ArrayType: {
-        JSC::JSBigInt64Array* typedArray = JSC::jsCast<JSC::JSBigInt64Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::BigInt64ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
-        return true;
-    }
-    case JSC::JSType::BigUint64ArrayType: {
-        JSC::JSBigUint64Array* typedArray = JSC::jsCast<JSC::JSBigUint64Array*>(value);
-        arg2->len = typedArray->length();
-        arg2->byte_len = typedArray->byteLength();
-        // the offset is already set by vector()
-        // https://github.com/oven-sh/bun/issues/561
-        arg2->offset = 0;
-        arg2->cell_type = JSC::JSType::BigUint64ArrayType;
-        arg2->ptr = (char*)typedArray->vector();
+        arg2->_value = JSValue::encode(value);
         return true;
     }
     case JSC::JSType::ObjectType:
@@ -1181,7 +1108,8 @@ bool JSC__JSValue__asArrayBuffer_(JSC__JSValue JSValue0, JSC__JSGlobalObject* ar
             arg2->byte_len = view->byteLength();
             arg2->offset = 0;
             arg2->cell_type = view->type();
-            arg2->ptr = (char*)view->vector();
+            arg2->ptr = (char*)view->vectorWithoutPACValidation();
+            arg2->_value = JSValue::encode(value);
             return true;
         }
 
@@ -1194,6 +1122,7 @@ bool JSC__JSValue__asArrayBuffer_(JSC__JSValue JSValue0, JSC__JSGlobalObject* ar
             arg2->offset = 0;
             arg2->cell_type = JSC::JSType::ArrayBufferType;
             arg2->ptr = (char*)buffer->data();
+            arg2->_value = JSValue::encode(value);
             return true;
         }
         break;
@@ -1208,7 +1137,7 @@ JSC__JSValue JSC__JSValue__createStringArray(JSC__JSGlobalObject* globalObject, 
     JSC::VM& vm = globalObject->vm();
     auto scope = DECLARE_THROW_SCOPE(vm);
     if (arg2 == 0) {
-        return JSC::JSValue::encode(JSC::JSArray::create(vm, 0));
+        return JSC::JSValue::encode(JSC::constructEmptyArray(globalObject, nullptr));
     }
 
     JSC::JSArray* array = nullptr;
@@ -1900,12 +1829,13 @@ bool JSC__JSValue__isError(JSC__JSValue JSValue0)
 
 bool JSC__JSValue__isAggregateError(JSC__JSValue JSValue0, JSC__JSGlobalObject* global)
 {
-    JSC::JSObject* obj = JSC::JSValue::decode(JSValue0).getObject();
+    JSValue value = JSC::JSValue::decode(JSValue0);
+    if (value.isUndefinedOrNull() || !value || !value.isObject()) {
+        return false;
+    }
 
-    if (obj != nullptr) {
-        if (JSC::ErrorInstance* err = JSC::jsDynamicCast<JSC::ErrorInstance*>(obj)) {
-            return err->errorType() == JSC::ErrorType::AggregateError;
-        }
+    if (JSC::ErrorInstance* err = JSC::jsDynamicCast<JSC::ErrorInstance*>(value)) {
+        return err->errorType() == JSC::ErrorType::AggregateError;
     }
 
     return false;
@@ -1953,7 +1883,7 @@ bool JSC__JSValue__isNumber(JSC__JSValue JSValue0)
 }
 bool JSC__JSValue__isObject(JSC__JSValue JSValue0)
 {
-    return JSC::JSValue::decode(JSValue0).isObject();
+    return JSValue0 != 0 && JSC::JSValue::decode(JSValue0).isObject();
 }
 bool JSC__JSValue__isPrimitive(JSC__JSValue JSValue0)
 {
@@ -2468,6 +2398,12 @@ static void fromErrorInstance(ZigException* except, JSC::JSGlobalObject* global,
             except->path = Zig::toZigString(path, global);
         }
 
+        if (JSC::JSValue fd = obj->getIfPropertyExists(global, Identifier::fromString(global->vm(), "fd"_s))) {
+            if (fd.isAnyInt()) {
+                except->fd = fd.toInt32(global);
+            }
+        }
+
         if (JSC::JSValue errno_ = obj->getIfPropertyExists(global, clientData->builtinNames().errnoPublicName())) {
             except->errno_ = errno_.toInt32(global);
         }
@@ -2632,10 +2568,30 @@ void JSC__JSValue__getNameProperty(JSC__JSValue JSValue0, JSC__JSGlobalObject* a
     arg2->len = 0;
 }
 
+JSC__JSValue JSC__JSValue__toError(JSC__JSValue JSValue0, JSC__JSGlobalObject* arg1)
+{
+    JSC::JSValue value = JSC::JSValue::decode(JSValue0);
+    if (JSC::Exception* jscException = JSC::jsDynamicCast<JSC::Exception*>(value)) {
+        if (JSC::ErrorInstance* error = JSC::jsDynamicCast<JSC::ErrorInstance*>(jscException->value())) {
+            return JSC::JSValue::encode(JSC::JSValue(error));
+        }
+    }
+    if (JSC::ErrorInstance* error = JSC::jsDynamicCast<JSC::ErrorInstance*>(value)) {
+        return JSC::JSValue::encode(JSC::JSValue(error));
+    }
+    return JSC::JSValue::encode(JSC::jsUndefined());
+}
+
 void JSC__JSValue__toZigException(JSC__JSValue JSValue0, JSC__JSGlobalObject* arg1,
     ZigException* exception)
 {
     JSC::JSValue value = JSC::JSValue::decode(JSValue0);
+    if (value == JSC::JSValue {}) {
+        exception->code = JSErrorCodeError;
+        exception->name = Zig::toZigString("Error"_s);
+        exception->message = Zig::toZigString("Unknown error"_s);
+        return;
+    }
 
     if (JSC::Exception* jscException = JSC::jsDynamicCast<JSC::Exception*>(value)) {
         if (JSC::ErrorInstance* error = JSC::jsDynamicCast<JSC::ErrorInstance*>(jscException->value())) {
@@ -3145,6 +3101,7 @@ enum class BuiltinNamesMap : uint8_t {
     status,
     url,
     body,
+    data,
 };
 
 static JSC::Identifier builtinNameMap(JSC::JSGlobalObject* globalObject, unsigned char name)
@@ -3165,6 +3122,9 @@ static JSC::Identifier builtinNameMap(JSC::JSGlobalObject* globalObject, unsigne
     }
     case BuiltinNamesMap::body: {
         return clientData->builtinNames().bodyPublicName();
+    }
+    case BuiltinNamesMap::data: {
+        return clientData->builtinNames().dataPublicName();
     }
     }
 }

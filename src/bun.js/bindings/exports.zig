@@ -180,11 +180,13 @@ pub const NodePath = JSC.Node.Path;
 // Web Streams
 pub const JSReadableStreamBlob = JSC.WebCore.ByteBlobLoader.Source.JSReadableStreamSource;
 pub const JSReadableStreamFile = JSC.WebCore.FileBlobLoader.Source.JSReadableStreamSource;
+pub const JSReadableStreamBytes = JSC.WebCore.ByteStream.Source.JSReadableStreamSource;
 
 // Sinks
 pub const JSArrayBufferSink = JSC.WebCore.ArrayBufferSink.JSSink;
 pub const JSHTTPSResponseSink = JSC.WebCore.HTTPSResponseSink.JSSink;
 pub const JSHTTPResponseSink = JSC.WebCore.HTTPResponseSink.JSSink;
+pub const JSFileSink = JSC.WebCore.FileSink.JSSink;
 
 // WebSocket
 pub const WebSocketHTTPClient = @import("../../http/websocket_http_client.zig").WebSocketHTTPClient;
@@ -251,6 +253,7 @@ pub const ResolvedSource = extern struct {
         @"node:events" = 1026,
         @"node:string_decoder" = 1027,
         @"node:module" = 1028,
+        @"node:tty" = 1029,
     };
 };
 
@@ -268,9 +271,9 @@ export fn ZigString__free(raw: [*]const u8, len: usize, allocator_: ?*anyopaque)
 }
 
 export fn ZigString__free_global(ptr: [*]const u8, len: usize) void {
-    if (comptime Environment.allow_assert) {
-        std.debug.assert(Mimalloc.mi_check_owned(ZigString.init(ptr[0..len]).slice().ptr));
-    }
+    // if (comptime Environment.allow_assert) {
+    //     std.debug.assert(Mimalloc.mi_check_owned(ptr));
+    // }
     // we must untag the string pointer
     Mimalloc.mi_free(@intToPtr(*anyopaque, @ptrToInt(ZigString.init(ptr[0..len]).slice().ptr)));
 }
@@ -764,6 +767,8 @@ pub const ZigException = extern struct {
 
     remapped: bool = false,
 
+    fd: i32 = -1,
+
     pub const shim = Shimmer("Zig", "Exception", @This());
     pub const name = "ZigException";
     pub const namespace = shim.namespace;
@@ -878,20 +883,13 @@ pub const ZigConsoleClient = struct {
     pub const name = "Zig::ConsoleClient";
     pub const include = "\"ZigConsoleClient.h\"";
     pub const namespace = shim.namespace;
-    pub const Counter = struct {
-        // if it turns out a hash table is a better idea we'll do that later
-        pub const Entry = struct {
-            hash: u32,
-            count: u32,
+    const Counter = std.AutoHashMapUnmanaged(u64, u32);
 
-            pub const List = std.MultiArrayList(Entry);
-        };
-        counts: Entry.List,
-        allocator: std.mem.Allocator,
-    };
     const BufferedWriter = std.io.BufferedWriter(4096, Output.WriterType);
     error_writer: BufferedWriter,
     writer: BufferedWriter,
+
+    counts: Counter = .{},
 
     pub fn init(error_writer: Output.WriterType, writer: Output.WriterType) ZigConsoleClient {
         return ZigConsoleClient{
@@ -942,7 +940,7 @@ pub const ZigConsoleClient = struct {
             return;
         }
 
-        var console = JS.VirtualMachine.vm.console;
+        var console = global.bunVM().console;
 
         if (message_type == .Clear) {
             Output.resetTerminal();
@@ -983,7 +981,10 @@ pub const ZigConsoleClient = struct {
                 true,
                 true,
             )
-        else if (message_type != .Trace)
+        else if (message_type == .Log) {
+            _ = console.writer.write("\n") catch 0;
+            console.writer.flush() catch {};
+        } else if (message_type != .Trace)
             writer.writeAll("undefined\n") catch unreachable;
 
         if (message_type == .Trace) {
@@ -1318,7 +1319,7 @@ pub const ZigConsoleClient = struct {
                     // Temporary workaround
                     // console.log(process.env) shows up as [class JSCallbackObject]
                     // We want to print it like an object
-                    if (CAPI.JSValueIsObjectOfClass(globalThis.ref(), value.asObjectRef(), JSC.API.Bun.EnvironmentVariables.Class.get().?[0])) {
+                    if (CAPI.JSValueIsObjectOfClass(globalThis, value.asObjectRef(), JSC.API.Bun.EnvironmentVariables.Class.get().?[0])) {
                         return .{
                             .tag = .Object,
                             .cell = js_type,
@@ -1374,7 +1375,11 @@ pub const ZigConsoleClient = struct {
                         JSValue.JSType.JSWeakSet, JSValue.JSType.JSSet => .Set,
                         JSValue.JSType.JSDate => .JSON,
                         JSValue.JSType.JSPromise => .Promise,
-                        .ArrayBuffer, JSValue.JSType.Object, JSValue.JSType.FinalObject => .Object,
+                        .ArrayBuffer,
+                        JSValue.JSType.Object,
+                        JSValue.JSType.FinalObject,
+                        .ModuleNamespaceObject,
+                        => .Object,
 
                         JSValue.JSType.Int8Array,
                         JSValue.JSType.Uint8Array,
@@ -1641,6 +1646,12 @@ pub const ZigConsoleClient = struct {
                 }
             }
 
+            defer {
+                if (comptime Format.canHaveCircularReferences()) {
+                    _ = this.map.remove(@enumToInt(value));
+                }
+            }
+
             switch (comptime Format) {
                 .StringPossiblyFormatted => {
                     var str = ZigString.init("");
@@ -1774,7 +1785,7 @@ pub const ZigConsoleClient = struct {
                             writer.writeAll(" ");
                         }
 
-                        const element = JSValue.fromRef(CAPI.JSObjectGetPropertyAtIndex(this.globalThis.ref(), ref, i, null));
+                        const element = JSValue.fromRef(CAPI.JSObjectGetPropertyAtIndex(this.globalThis, ref, i, null));
                         const tag = Tag.get(element, this.globalThis);
 
                         this.format(tag, Writer, writer_, element, this.globalThis, enable_ansi_colors);
@@ -1795,6 +1806,9 @@ pub const ZigConsoleClient = struct {
                     } else if (value.as(JSC.WebCore.Request)) |request| {
                         request.writeFormat(this, writer_, enable_ansi_colors) catch {};
                         return;
+                    } else if (value.as(JSC.WebCore.Blob)) |blob| {
+                        blob.writeFormat(this, writer_, enable_ansi_colors) catch {};
+                        return;
                     } else if (jsType != .DOMWrapper) {
                         if (CAPI.JSObjectGetPrivate(value.asRef())) |private_data_ptr| {
                             const priv_data = JSPrivateDataPtr.from(private_data_ptr);
@@ -1807,11 +1821,6 @@ pub const ZigConsoleClient = struct {
                                 .ResolveError => {
                                     const resolve_error = priv_data.as(JS.ResolveError);
                                     resolve_error.msg.writeFormat(writer_, enable_ansi_colors) catch {};
-                                    return;
-                                },
-                                .Blob => {
-                                    var request = priv_data.as(JSC.WebCore.Blob);
-                                    request.writeFormat(this, writer_, enable_ansi_colors) catch {};
                                     return;
                                 },
                                 else => {},
@@ -2048,7 +2057,7 @@ pub const ZigConsoleClient = struct {
                             .skip_empty_name = true,
 
                             .include_value = true,
-                        }).init(this.globalThis.ref(), props.asObjectRef());
+                        }).init(this.globalThis, props.asObjectRef());
                         defer props_iter.deinit();
 
                         var children_prop = props.get(this.globalThis, "children");
@@ -2206,7 +2215,7 @@ pub const ZigConsoleClient = struct {
                         var props_iter = JSC.JSPropertyIterator(.{
                             .skip_empty_name = true,
                             .include_value = true,
-                        }).init(this.globalThis.ref(), object);
+                        }).init(this.globalThis, object);
                         defer props_iter.deinit();
 
                         const prev_quote_strings = this.quote_strings;
@@ -2445,22 +2454,45 @@ pub const ZigConsoleClient = struct {
         // console
         _: ZigConsoleClient.Type,
         // global
-        _: *JSGlobalObject,
+        globalThis: *JSGlobalObject,
         // chars
-        _: [*]const u8,
+        ptr: [*]const u8,
         // len
-        _: usize,
-    ) callconv(.C) void {}
+        len: usize,
+    ) callconv(.C) void {
+        var this = globalThis.bunVM().console;
+        const slice = ptr[0..len];
+        const hash = bun.hash(slice);
+        // we don't want to store these strings, it will take too much memory
+        var counter = this.counts.getOrPut(globalThis.allocator(), hash) catch unreachable;
+        const current = @as(u32, if (counter.found_existing) counter.value_ptr.* else @as(u32, 0)) + 1;
+        counter.value_ptr.* = current;
+
+        var writer_ctx = &this.writer;
+        var writer = &writer_ctx.writer();
+        if (Output.enable_ansi_colors_stdout)
+            writer.print(comptime Output.prettyFmt("<r>{s}<d>: <r><yellow>{d}<r>\n", true), .{ slice, current }) catch unreachable
+        else
+            writer.print(comptime Output.prettyFmt("<r>{s}<d>: <r><yellow>{d}<r>\n", false), .{ slice, current }) catch unreachable;
+        writer_ctx.flush() catch unreachable;
+    }
     pub fn countReset(
         // console
         _: ZigConsoleClient.Type,
         // global
-        _: *JSGlobalObject,
+        globalThis: *JSGlobalObject,
         // chars
-        _: [*]const u8,
+        ptr: [*]const u8,
         // len
-        _: usize,
-    ) callconv(.C) void {}
+        len: usize,
+    ) callconv(.C) void {
+        var this = globalThis.bunVM().console;
+        const slice = ptr[0..len];
+        const hash = bun.hash(slice);
+        // we don't delete it because deleting is implemented via tombstoning
+        var entry = this.counts.getEntry(hash) orelse return;
+        entry.value_ptr.* = 0;
+    }
 
     const PendingTimers = std.AutoHashMap(u64, ?std.time.Timer);
     threadlocal var pending_time_logs: PendingTimers = undefined;
@@ -2754,7 +2786,7 @@ pub const HTTPServerRequestContext = JSC.API.Server.RequestContext;
 pub const HTTPSSLServerRequestContext = JSC.API.SSLServer.RequestContext;
 pub const HTTPDebugServerRequestContext = JSC.API.DebugServer.RequestContext;
 pub const HTTPDebugSSLServerRequestContext = JSC.API.DebugSSLServer.RequestContext;
-
+pub const TestScope = @import("../test/jest.zig").TestScope;
 comptime {
     if (!is_bindgen) {
         WebSocketHTTPClient.shim.ref();
@@ -2777,9 +2809,12 @@ comptime {
         JSArrayBufferSink.shim.ref();
         JSHTTPResponseSink.shim.ref();
         JSHTTPSResponseSink.shim.ref();
-
+        JSFileSink.shim.ref();
+        JSReadableStreamBytes.shim.ref();
         JSReadableStreamFile.shim.ref();
         _ = ZigString__free;
         _ = ZigString__free_global;
+
+        TestScope.shim.ref();
     }
 }

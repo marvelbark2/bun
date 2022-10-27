@@ -1,5 +1,5 @@
-import { gc } from "bun";
 import { describe, expect, it } from "bun:test";
+import { gc, gcTick } from "gc";
 import {
   closeSync,
   existsSync,
@@ -14,7 +14,10 @@ import {
   statSync,
   lstatSync,
   copyFileSync,
+  rmSync,
+  createReadStream,
 } from "node:fs";
+import { join } from "node:path";
 
 const Buffer = globalThis.Buffer || Uint8Array;
 
@@ -219,16 +222,35 @@ describe("writeSync", () => {
 
 describe("readFileSync", () => {
   it("works", () => {
+    gc();
     const text = readFileSync(import.meta.dir + "/readFileSync.txt", "utf8");
+    gc();
     expect(text).toBe("File read successfully");
+    gc();
   });
 
   it("works with a file url", () => {
+    gc();
     const text = readFileSync(
       new URL("file://" + import.meta.dir + "/readFileSync.txt"),
       "utf8"
     );
+    gc();
     expect(text).toBe("File read successfully");
+  });
+
+  it("works with special files in the filesystem", () => {
+    {
+      const text = readFileSync("/dev/null", "utf8");
+      gc();
+      expect(text).toBe("");
+    }
+
+    if (process.platform === "linux") {
+      const text = readFileSync("/proc/filesystems");
+      gc();
+      expect(text.length > 0).toBe(true);
+    }
   });
 
   it("returning Buffer works", () => {
@@ -245,8 +267,10 @@ describe("readFileSync", () => {
 
 describe("readFile", () => {
   it("works", async () => {
+    gc();
     await new Promise((resolve, reject) => {
       readFile(import.meta.dir + "/readFileSync.txt", "utf8", (err, text) => {
+        gc();
         expect(text).toBe("File read successfully");
         resolve(true);
       });
@@ -254,12 +278,15 @@ describe("readFile", () => {
   });
 
   it("returning Buffer works", async () => {
+    gc();
     await new Promise((resolve, reject) => {
+      gc();
       readFile(import.meta.dir + "/readFileSync.txt", (err, text) => {
         const encoded = [
           70, 105, 108, 101, 32, 114, 101, 97, 100, 32, 115, 117, 99, 99, 101,
           115, 115, 102, 117, 108, 108, 121,
         ];
+        gc();
         for (let i = 0; i < encoded.length; i++) {
           expect(text[i]).toBe(encoded[i]);
         }
@@ -361,5 +388,77 @@ describe("stat", () => {
     expect(fileStats.isSymbolicLink()).toBe(false);
     expect(fileStats.isFile()).toBe(false);
     expect(fileStats.isDirectory()).toBe(true);
+  });
+});
+
+describe("rm", () => {
+  it("removes a file", () => {
+    const path = `/tmp/${Date.now()}.rm.txt`;
+    writeFileSync(path, "File written successfully", "utf8");
+    expect(existsSync(path)).toBe(true);
+    rmSync(path);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("removes a dir", () => {
+    const path = `/tmp/${Date.now()}.rm.dir`;
+    try {
+      mkdirSync(path);
+    } catch (e) {}
+    expect(existsSync(path)).toBe(true);
+    rmSync(path);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("removes a dir recursively", () => {
+    const path = `/tmp/${Date.now()}.rm.dir/foo/bar`;
+    try {
+      mkdirSync(path, { recursive: true });
+    } catch (e) {}
+    expect(existsSync(path)).toBe(true);
+    rmSync(join(path, "../../"), { recursive: true });
+    expect(existsSync(path)).toBe(false);
+  });
+});
+
+describe("createReadStream", () => {
+  it("works (1 chunk)", async () => {
+    return await new Promise((resolve, reject) => {
+      var stream = createReadStream(import.meta.dir + "/readFileSync.txt", {});
+
+      stream.on("error", (e) => {
+        reject(e);
+      });
+
+      stream.on("data", (chunk) => {
+        expect(chunk instanceof Buffer).toBe(true);
+        expect(chunk.length).toBe("File read successfully".length);
+        expect(chunk.toString()).toBe("File read successfully");
+      });
+
+      stream.on("close", () => {
+        resolve(true);
+      });
+    });
+  });
+
+  it("works (22 chunk)", async () => {
+    var stream = createReadStream(import.meta.dir + "/readFileSync.txt", {
+      highWaterMark: 1,
+    });
+
+    var data = readFileSync(import.meta.dir + "/readFileSync.txt", "utf8");
+    var i = 0;
+    return await new Promise((resolve) => {
+      stream.on("data", (chunk) => {
+        expect(chunk instanceof Buffer).toBe(true);
+        expect(chunk.length).toBe(1);
+        expect(chunk.toString()).toBe(data[i++]);
+      });
+
+      stream.on("end", () => {
+        resolve(true);
+      });
+    });
   });
 });

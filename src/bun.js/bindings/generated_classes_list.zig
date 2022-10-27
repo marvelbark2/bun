@@ -12,4 +12,10 @@ pub const Classes = struct {
     pub const SHA256 = JSC.API.Bun.Crypto.SHA256;
     pub const SHA512_256 = JSC.API.Bun.Crypto.SHA512_256;
     pub const TextDecoder = JSC.WebCore.TextDecoder;
+    pub const Blob = JSC.WebCore.Blob;
+    pub const Subprocess = JSC.Subprocess;
+    pub const ServerWebSocket = JSC.API.ServerWebSocket;
+    pub const TCPSocket = JSC.API.TCPSocket;
+    pub const TLSSocket = JSC.API.TLSSocket;
+    pub const Listener = JSC.API.Listener;
 };

@@ -4,6 +4,7 @@
  * Copyright (c) 2015 Igalia.
  * Copyright (c) 2015, 2016 Canon Inc. All rights reserved.
  * Copyright (c) 2015, 2016, 2017 Canon Inc.
+ * Copyright (c) 2016, 2018 -2018 Apple Inc. All rights reserved.
  * Copyright (c) 2016, 2020 Apple Inc. All rights reserved.
  * Copyright (c) 2022 Codeblog Corp. All rights reserved.
  * 
@@ -214,7 +215,7 @@ const char* const s_readableStreamReadableStreamToBlobCode =
 const JSC::ConstructAbility s_readableStreamConsumeReadableStreamCodeConstructAbility = JSC::ConstructAbility::CannotConstruct;
 const JSC::ConstructorKind s_readableStreamConsumeReadableStreamCodeConstructorKind = JSC::ConstructorKind::None;
 const JSC::ImplementationVisibility s_readableStreamConsumeReadableStreamCodeImplementationVisibility = JSC::ImplementationVisibility::Private;
-const int s_readableStreamConsumeReadableStreamCodeLength = 3718;
+const int s_readableStreamConsumeReadableStreamCodeLength = 3736;
 static const JSC::Intrinsic s_readableStreamConsumeReadableStreamCodeIntrinsic = JSC::NoIntrinsic;
 const char* const s_readableStreamConsumeReadableStreamCode =
     "(function (nativePtr, nativeType, inputStream) {\n" \
@@ -309,6 +310,8 @@ const char* const s_readableStreamConsumeReadableStreamCode =
     "                }  else {\n" \
     "                    return -1;\n" \
     "                }\n" \
+    "\n" \
+    "                \n" \
     "            }\n" \
     "\n" \
     "            readMany() {\n" \
@@ -558,6 +561,40 @@ const char* const s_readableStreamLockedCode =
     "        throw @makeGetterTypeError(\"ReadableStream\", \"locked\");\n" \
     "\n" \
     "    return @isReadableStreamLocked(this);\n" \
+    "})\n" \
+;
+
+const JSC::ConstructAbility s_readableStreamValuesCodeConstructAbility = JSC::ConstructAbility::CannotConstruct;
+const JSC::ConstructorKind s_readableStreamValuesCodeConstructorKind = JSC::ConstructorKind::None;
+const JSC::ImplementationVisibility s_readableStreamValuesCodeImplementationVisibility = JSC::ImplementationVisibility::Public;
+const int s_readableStreamValuesCodeLength = 249;
+static const JSC::Intrinsic s_readableStreamValuesCodeIntrinsic = JSC::NoIntrinsic;
+const char* const s_readableStreamValuesCode =
+    "(function (options) {\n" \
+    "    \"use strict\";\n" \
+    "    var prototype = this?.constructor?.prototype;\n" \
+    "    if (!prototype) {\n" \
+    "        return @undefined;\n" \
+    "    }\n" \
+    "    @readableStreamDefineLazyIterators(prototype);\n" \
+    "    return prototype.values.@call(this, options);\n" \
+    "})\n" \
+;
+
+const JSC::ConstructAbility s_readableStreamLazyAsyncIteratorCodeConstructAbility = JSC::ConstructAbility::CannotConstruct;
+const JSC::ConstructorKind s_readableStreamLazyAsyncIteratorCodeConstructorKind = JSC::ConstructorKind::None;
+const JSC::ImplementationVisibility s_readableStreamLazyAsyncIteratorCodeImplementationVisibility = JSC::ImplementationVisibility::Private;
+const int s_readableStreamLazyAsyncIteratorCodeLength = 259;
+static const JSC::Intrinsic s_readableStreamLazyAsyncIteratorCodeIntrinsic = JSC::NoIntrinsic;
+const char* const s_readableStreamLazyAsyncIteratorCode =
+    "(function () {\n" \
+    "    \"use strict\";\n" \
+    "    var prototype = this?.constructor?.prototype;\n" \
+    "    if (!prototype) {\n" \
+    "        return @undefined;\n" \
+    "    }\n" \
+    "    @readableStreamDefineLazyIterators(prototype);\n" \
+    "    return prototype[globalThis.Symbol.asyncIterator].@call(this);\n" \
     "})\n" \
 ;
 

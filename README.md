@@ -29,6 +29,13 @@ Native: (macOS x64 & Silicon, Linux x64, Windows Subsystem for Linux)
 curl -fsSL https://bun.sh/install | bash
 ```
 
+Homebrew: (MacOS and Linux)
+
+```sh
+brew tap oven-sh/bun
+brew install bun
+```
+
 Docker: (Linux x64)
 
 ```sh
@@ -37,6 +44,24 @@ docker run --rm --init --ulimit memlock=-1:-1 jarredsumner/bun:edge
 ```
 
 If using Linux, kernel version 5.6 or higher is strongly recommended, but the minimum is 5.1.
+
+## Upgrade
+
+To upgrade to the latest version of Bun, run:
+
+```sh
+bun upgrade
+```
+
+Bun automatically releases a canary build on every commit to `main`. To upgrade to the latest canary build, run:
+
+```sh
+bun upgrade --canary
+```
+
+[View canary build](https://github.com/oven-sh/bun/releases/tag/canary)
+
+<sup>Canary builds are released without automated tests</sup>
 
 ## Table of Contents
 
@@ -60,7 +85,7 @@ If using Linux, kernel version 5.6 or higher is strongly recommended, but the mi
 - [Configuration](#configuration)
   - [bunfig.toml](#bunfigtoml)
   - [Loaders](#loaders)
-  - [CSS in JS](#css-in-js)
+  - [CSS in JS](#css-in-js-bun-dev-only)
     - [When `platform` is `browser`](#when-platform-is-browser)
     - [When `platform` is `bun`](#when-platform-is-bun)
   - [CSS Loader](#css-loader)
@@ -109,8 +134,12 @@ If using Linux, kernel version 5.6 or higher is strongly recommended, but the mi
   - [`bun completions`](#bun-completions)
 - [`Bun.serve` - fast HTTP server](#bunserve---fast-http-server)
   - [Usage](#usage-1)
+  - [HTTPS](#https-with-bunserve)
+  - [WebSockets](#websockets-with-bunserve)
   - [Error handling](#error-handling)
 - [`Bun.write` – optimizing I/O](#bunwrite--optimizing-io)
+- [`Bun.spawn` - spawn processes](#bunspawn--spawn-a-process)
+- [`Bun.which` - find the path to a bin](#bunwhich--find-the-path-to-a-binary)
 - [bun:sqlite (SQLite3 module)](#bunsqlite-sqlite3-module)
   - [bun:sqlite Benchmark](#bunsqlite-benchmark)
   - [Getting started with bun:sqlite](#getting-started-with-bunsqlite)
@@ -145,6 +174,7 @@ If using Linux, kernel version 5.6 or higher is strongly recommended, but the mi
   - [`Bun.Transpiler.transform`](#buntranspilertransform)
   - [`Bun.Transpiler.scan`](#buntranspilerscan)
   - [`Bun.Transpiler.scanImports`](#buntranspilerscanimports)
+- [`Bun.peek` - read a promise same-tick](#bunpeek---read-a-promise-without-resolving-it)
 - [Environment variables](#environment-variables)
 - [Credits](#credits)
 - [License](#license)
@@ -535,7 +565,6 @@ You can see [Bun's Roadmap](https://github.com/oven-sh/bun/issues/159), but here
 | ------------------------------------------------------------------------------------- | -------------- |
 | Web Streams with Fetch API                                                            | bun.js         |
 | Web Streams with HTMLRewriter                                                         | bun.js         |
-| WebSocket Server                                                                      | bun.js         |
 | Package hoisting that matches npm behavior                                            | bun install    |
 | Source Maps (unbundled is supported)                                                  | JS Bundler     |
 | Source Maps                                                                           | CSS            |
@@ -713,7 +742,7 @@ Additionally, bun exposes an API for SSR/SSG that returns a flat list of URLs to
 // Initially, you could only use bun.js through `bun dev`
 // and this API was created at that time
 addEventListener("fetch", async (event: FetchEvent) => {
-  var route = Bun.match(event);
+  let route = Bun.match(event);
   const App = await import("pages/_app");
 
   // This returns all .css files that were imported in the line above.
@@ -1309,6 +1338,106 @@ bun run relay-compiler --schema foo.graphql
 
 `bun run` supports lifecycle hooks like `post${task}` and `pre{task}`. If they exist, they will run, matching the behavior of npm clients. If the `pre${task}` fails, the next task will not be run. There is currently no flag to skip these lifecycle tasks if they exist, if you want that file an issue.
 
+### `bun --hot`
+
+`bun --hot` enables hot reloading of code in Bun's JavaScript runtime. This is a very experimental feature available in Bun v0.2.0.
+
+Unlike file watchers like `nodemon`, `bun --hot` can keep stateful objects like the HTTP server running.
+
+<table>
+<tr>
+<th width="800" align="center">
+Bun v0.2.0
+</th>
+<th width="800" align="center">
+Nodemon
+</th>
+</tr>
+</table>
+
+![Screen Recording 2022-10-06 at 2 36 06 AM](https://user-images.githubusercontent.com/709451/195477632-5fd8a73e-014d-4589-9ba2-e075ad9eb040.gif)
+
+To use it with Bun's HTTP server (automatic):
+
+`server.ts`:
+
+```ts
+// The global object is preserved across code reloads
+// You can use it to store state, for now until Bun implements import.meta.hot.
+const reloadCount = globalThis.reloadCount || 0;
+globalThis.reloadCount = reloadCount + 1;
+
+export default {
+  fetch(req: Request) {
+    return new Response(`Code reloaded ${reloadCount} times`, {
+      headers: { "content-type": "text/plain" },
+    });
+  },
+};
+```
+
+Then, run:
+
+```bash
+bun --hot server.ts
+```
+
+You can also use `bun run`:
+
+```bash
+bun run --hot server.ts
+```
+
+To use it manually:
+
+```ts
+// The global object is preserved across code reloads
+// You can use it to store state, for now until Bun implements import.meta.hot.
+const reloadCount = globalThis.reloadCount || 0;
+globalThis.reloadCount = reloadCount + 1;
+
+const reloadServer = (globalThis.reloadServer ||= (() => {
+  let server;
+  return (handler) => {
+    if (server) {
+      // call `server.reload` to reload the server
+      server.reload(handler);
+    } else {
+      server = Bun.serve(handler);
+    }
+    return server;
+  };
+})());
+
+const handler = {
+  fetch(req: Request) {
+    return new Response(`Code reloaded ${reloadCount} times`, {
+      headers: { "content-type": "text/plain" },
+    });
+  },
+};
+
+reloadServer(handler);
+```
+
+In a future version of Bun, support for Vite's `import.meta.hot` is planned to enable better lifecycle management for hot reloading and to align with the ecosystem.
+
+#### How `bun --hot` works
+
+`bun --hot` monitors imported files for changes and reloads them. It does not monitor files that are not imported and it does not monitor `node_modules`.
+
+On reload, it resets the internal `require` cache and ES module registry (`Loader.registry`).
+
+Then:
+
+- It runs the garbage collector synchronously (to minimize memory leaks, at the cost of runtime performance)
+- Bun re-transpiles all of your code from scratch (including sourcemaps)
+- JavaScriptCore (the engine) re-evaluates the code.
+
+Traditional file watchers restart the entire process which means that HTTP servers and other stateful objects are lost. `bun --hot` does not restart the process, so it preserves _some_ state across reloads to be less intrusive.
+
+This implementation isn't particularly optimized. It re-transpiles files that haven't changed. It makes no attempt at incremental compilation. It's a starting point.
+
 ### `bun create`
 
 `bun create` is a fast way to create a new project from a template.
@@ -1335,7 +1464,7 @@ Create from a GitHub repo:
 bun create ahfarmer/calculator ./app
 ```
 
-To see a list of examples, run:
+To see a list of templates, run:
 
 ```bash
 bun create
@@ -1357,7 +1486,7 @@ Note: you don’t need `bun create` to use bun. You don’t need any configurati
 
 If you have your own boilerplate you prefer using, copy it into `$HOME/.bun-create/my-boilerplate-name`.
 
-Before checking bun’s examples folder, `bun create` checks for a local folder matching the input in:
+Before checking bun’s templates on npmjs, `bun create` checks for a local folder matching the input in:
 
 - `$BUN_CREATE_DIR/`
 - `$HOME/.bun-create/`
@@ -1407,7 +1536,7 @@ By default, `bun create` will cancel if there are existing files it would overwr
 
 #### Publishing a new template
 
-Clone this repository and a new folder in `examples/` with your new template. The `package.json` must have a `name` that starts with `@bun-examples/`. Do not worry about publishing it, that will happen automatically after the PR is merged.
+Clone [https://github.com/bun-community/create-templates/](https://github.com/bun-community/create-templates/) and create a new folder in root directory with your new template. The `package.json` must have a `name` that starts with `@bun-examples/`. Do not worry about publishing it, that will happen automatically after the PR is merged.
 
 Make sure to include a `.gitignore` that includes `node_modules` so that `node_modules` aren’t checked in to git when people download the template.
 
@@ -1425,10 +1554,11 @@ Warning: **This will always delete everything in destination-dir**.
 
 The `bun-create` section of `package.json` is automatically removed from the `package.json` on disk. This lets you add create-only steps without waiting for an extra package to install.
 
-There are currently two options:
+There are currently three options:
 
 - `postinstall`
 - `preinstall`
+- `start` (customize the displayed start command)
 
 They can be an array of strings or one string. An array of steps will be executed in order.
 
@@ -1451,7 +1581,8 @@ Here is an example:
     "typescript": "^4.3.5"
   },
   "bun-create": {
-    "postinstall": ["bun bun --use next"]
+    "postinstall": ["bun bun --use next"],
+    "start": "bun run echo 'Hello world!'"
   }
 }
 ```
@@ -1545,7 +1676,7 @@ From a design perspective, the most important part of the `.bun` format is how c
 // preact/dist/preact.module.js
 export var $eb6819b = $$m({
   "preact/dist/preact.module.js": (module, exports) => {
-    var n, l, u, i, t, o, r, f, e = {}, c = [], s = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i;
+    let n, l, u, i, t, o, r, f, e = {}, c = [], s = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i;
     // ... rest of code
 ```
 
@@ -1952,7 +2083,742 @@ const server = Bun.serve({
 server.stop();
 ```
 
-The interface for `Bun.serve` is based on what [Cloudflare Workers](https://developers.cloudflare.com/workers/learning/migrating-to-module-workers/#module-workers-in-the-dashboard) does.
+### HTTPS with Bun.serve()
+
+`Bun.serve()` has builtin support for TLS (HTTPS). Pass `keyFile` and `certFile` option to enable HTTPS.
+
+Example:
+
+```ts
+Bun.serve({
+  fetch(req) {
+    return new Response("Hello!!!");
+  },
+  /**
+   * File path to a TLS key
+   *
+   * To enable TLS, this option is required.
+   */
+  keyFile: "./key.pem",
+  /**
+   * File path to a TLS certificate
+   *
+   * To enable TLS, this option is required.
+   */
+  certFile: "./cert.pem",
+
+  /**
+   * Optional SSL options
+   */
+  // passphrase?: string;
+  // caFile?: string;
+  // dhParamsFile?: string;
+  // lowMemoryMode?: boolean;
+});
+```
+
+### WebSockets with Bun.serve()
+
+`Bun.serve()` has builtin support for server-side websockets (as of Bun v0.2.1).
+
+Features:
+
+- Compression (pass `perMessageDeflate: true`)
+- HTTPS
+- Pubsub / broadcast support with MQTT-like topics
+
+It's also fast. For [a chatroom](./bench/websocket-server/) on Linux x64:
+
+| Messages sent per second | Runtime                        | Clients |
+| ------------------------ | ------------------------------ | ------- |
+| ~700,000                 | (`Bun.serve`) Bun v0.2.1 (x64) | 16      |
+| ~100,000                 | (`ws`) Node v18.10.0 (x64)     | 16      |
+
+Here is an example that echoes back any message it receives:
+
+```ts
+Bun.serve({
+  websocket: {
+    message(ws, message) {
+      ws.send(message);
+    },
+  },
+
+  fetch(req, server) {
+    // Upgrade to a ServerWebSocket if we can
+    // This automatically checks for the `Sec-WebSocket-Key` header
+    // meaning you don't have to check headers, you can just call `upgrade()`
+    if (server.upgrade(req))
+      // When upgrading, we return undefined since we don't want to send a Response
+      return;
+
+    return new Response("Regular HTTP response");
+  },
+});
+```
+
+Here is a more complete example:
+
+```ts
+type User = {
+  name: string;
+};
+
+Bun.serve<User>({
+  fetch(req, server) {
+    if (req.url === "/chat") {
+      if (
+        server.upgrade(req, {
+          // This User object becomes ws.data
+          data: {
+            name: new URL(req.url).searchParams.get("name") || "Friend",
+          },
+          // Pass along some headers to the client
+          headers: {
+            "Set-Cookie": "name=" + new URL(req.url).searchParams.get("name"),
+          },
+        })
+      )
+        return;
+    }
+
+    return new Response("Expected a websocket connection", { status: 400 });
+  },
+
+  websocket: {
+    open(ws) {
+      console.log("WebSocket opened");
+
+      // subscribe to "the-group-chat" topic
+      ws.subscribe("the-group-chat");
+    },
+
+    message(ws, message) {
+      // In a group chat, we want to broadcast to everyone
+      // so we use publish()
+      ws.publish("the-group-chat", `${ws.data.name}: ${message}`);
+    },
+
+    close(ws, code, reason) {
+      ws.publish("the-group-chat", `${ws.data.name} left the chat`);
+    },
+
+    drain(ws) {
+      console.log("Please send me data. I am ready to receive it.");
+    },
+
+    // enable compression
+    perMessageDeflate: true,
+    /*
+    * perMessageDeflate: {
+       **
+       * Enable compression on the {@link ServerWebSocket}
+       *
+       * @default false
+       *
+       * `true` is equivalent to `"shared"
+       compress?: WebSocketCompressor | false | true;
+       **
+       * Configure decompression
+       *
+       * @default false
+       *
+       * `true` is equivalent to `"shared"
+       decompress?: WebSocketCompressor | false | true;
+    */
+
+    /**
+     * The maximum size of a message
+     */
+    // maxPayloadLength?: number;
+    /**
+     * After a connection has not received a message for this many seconds, it will be closed.
+     * @default 120 (2 minutes)
+     */
+    // idleTimeout?: number;
+    /**
+     * The maximum number of bytes that can be buffered for a single connection.
+     * @default 16MB
+     */
+    // backpressureLimit?: number;
+    /**
+     * Close the connection if the backpressure limit is reached.
+     * @default false
+     */
+    // closeOnBackpressureLimit?: boolean;
+
+    // this makes it so ws.data shows up as a Request object
+  },
+  // TLS is also supported with WebSockets
+  /**
+   * File path to a TLS key
+   *
+   * To enable TLS, this option is required.
+   */
+  // keyFile: "./key.pem",
+  /**
+   * File path to a TLS certificate
+   *
+   * To enable TLS, this option is required.
+   */
+  // certFile: "./cert.pem",
+});
+```
+
+#### ServerWebSocket vs WebSocket
+
+For server websocket connections, Bun exposes a `ServerWebSocket` class which is similar to the web-standard `WebSocket` class used for websocket client connections, but with a few differences:
+
+##### Headers
+
+`ServerWebSocket` supports passing headers. This is useful for setting cookies or other headers that you want to send to the client before the connection is upgraded.
+
+```ts
+Bun.serve({
+  fetch(req, server) {
+    if (
+      server.upgrade(req, { headers: { "Set-Cookie": "name=HiThereMyNameIs" } })
+    )
+      return;
+  },
+  websocket: {
+    message(ws, message) {
+      ws.send(message);
+    },
+  },
+});
+```
+
+The web-standard `WebSocket` API does not let you specify headers.
+
+##### Publish/subscribe
+
+`ServerWebSocket` has `publish()`, `subscribe()`, and `unsubscribe` methods which let you broadcast the same message to all clients connected to a topic in one line of code.
+
+```ts
+ws.publish("stock-prices/GOOG", `${price}`);
+```
+
+##### Backpressure
+
+`ServerWebSocket.send` returns a number that indicates:
+
+- `0` if the message was dropped due to a connection issue
+- `-1` if the message was enqueued but there is backpressure
+- any other number indicates the number of bytes sent
+
+This lets you have **better control over backpressure in your server**.
+
+You can also enable/disable compression per message with the `compress` option:
+
+```ts
+// this will compress
+ws.send("Hello".repeat(1000), true);
+```
+
+`WebSocket.send` returns `undefined` and does not indicate backpressure, which can cause issues if you are sending a lot of data.
+
+`ServerWebSocket` also supports a `drain` callback that runs when the connection is ready to receive more data.
+
+##### Callbacks are per server instead of per socket
+
+`ServerWebSocket` expects you to pass a `WebSocketHandler` object to the `Bun.serve()` method which has methods for `open`, `message`, `close`, `drain`, and `error`. This is different than the client-side `WebSocket` class which extends `EventTarget` (onmessage, onopen, onclose),
+
+Clients tend to not have many socket connections open so an event-based API makes sense.
+
+But servers tend to have **many** socket connections open, which means:
+
+- Time spent adding/removing event listeners for each connection adds up
+- Extra memory spent on storing references to callbacks function for each connection
+- Usually, people create new functions for each connection, which also means more memory
+
+So, instead of using an event-based API, `ServerWebSocket` expects you to pass a single object with methods for each event in `Bun.serve()` and it is reused for each connection.
+
+This leads to less memory usage and less time spent adding/removing event listeners.
+
+---
+
+The interface for `Bun.serve` is loosely based on what [Cloudflare Workers](https://developers.cloudflare.com/workers/learning/migrating-to-module-workers/#module-workers-in-the-dashboard) does.
+
+The HTTP server and server-side websockets are based on [uWebSockets](https://github.com/uNetworking/uWebSockets).
+
+## `Bun.spawn` – spawn a process
+
+`Bun.spawn` lets you quickly spawn a process. Available as of Bun v0.2.0.
+
+```ts
+import { spawn } from "bun";
+
+const { stdout } = spawn(["esbuild"], {
+  stdin: await fetch(
+    "https://raw.githubusercontent.com/oven-sh/bun/main/examples/hashing.js"
+  ),
+});
+
+const text = await new Response(stdout).text();
+console.log(text); // "const input = "hello world".repeat(400); ..."
+```
+
+Bun.spawn spawns processes 60% faster than Node.js' `child_process`.
+
+```zig
+❯ bun spawn.mjs
+cpu: Apple M1 Max
+runtime: bun 0.2.0 (arm64-darwin)
+
+benchmark              time (avg)             (min … max)       p75       p99      p995
+--------------------------------------------------------- -----------------------------
+spawnSync echo hi  888.14 µs/iter    (821.83 µs … 1.2 ms) 905.92 µs      1 ms   1.03 ms
+
+❯ node spawn.node.mjs
+cpu: Apple M1 Max
+runtime: node v18.9.1 (arm64-darwin)
+
+benchmark              time (avg)             (min … max)       p75       p99      p995
+--------------------------------------------------------- -----------------------------
+spawnSync echo hi    1.47 ms/iter     (1.14 ms … 2.64 ms)   1.57 ms   2.37 ms   2.52 ms
+```
+
+Synchronous example:
+
+```ts
+import { spawnSync } from "bun";
+
+const { stdout } = spawnSync(["echo", "hi"]);
+
+// When using spawnSync, stdout is a Buffer
+// this lets you read from it synchronously
+const text = stdout.toString();
+
+console.log(text); // "hi\n"
+```
+
+You can pass an object as the second argument to customize the process:
+
+```ts
+import { spawn } from "bun";
+
+const { stdout } = spawn(["printenv", "FOO"], {
+  cwd: "/tmp",
+
+  env: {
+    ...process.env,
+    FOO: "bar",
+  },
+
+  // Disable stdin
+  stdin: null,
+
+  // Allow us to read from stdout
+  stdout: "pipe",
+
+  // Point stderr to write to "/tmp/stderr.log"
+  stderr: Bun.file("/tmp/stderr.log"),
+});
+
+const text = await new Response(stdout).text();
+console.log(text); // "bar\n"
+```
+
+You can also pass a `Bun.file` for `stdin`:
+
+```ts
+import { spawn, file, write } from "bun";
+
+await write("/tmp/foo.txt", "hi");
+const { stdout } = spawn(["cat"], {
+  // Set /tmp/foo.txt as stdin
+  stdin: file("/tmp/foo.txt"),
+});
+
+const text = await new Response(stdout).text();
+console.log(text); // "hi\n"
+```
+
+`stdin` also accepts a TypedArray:
+
+```ts
+import { spawn } from "bun";
+
+const { stdout } = spawn(["cat"], {
+  stdin: new TextEncoder().encode("hi"),
+  stdout: "pipe",
+});
+
+const text = await new Response(stdout).text();
+console.log(text); // "hi\n"
+```
+
+`Bun.spawn` also supports incrementally writing to stdin:
+
+> :warning: **This API is a little buggy right now**
+
+```ts
+import { spawn } from "bun";
+
+const { stdin, stdout } = spawn(["cat"], {
+  stdin: "pipe",
+  stdout: "pipe",
+});
+
+// You can pass it strings or TypedArrays
+// Write "hi" to stdin
+stdin.write("hi");
+
+// By default, stdin is buffered so you need to call flush() to send it
+stdin.flush(true);
+
+// When you're done, call end()
+stdin.end();
+
+const text = await new Response(stdout).text();
+console.log(text); // "hi\n"
+```
+
+Under the hood, `Bun.spawn` and `Bun.spawnSync` use [`posix_spawn(3)`](https://man7.org/linux/man-pages/man3/posix_spawn.3.html).
+
+**stdin**
+
+`stdin` can be one of:
+
+- `Bun.file()`
+- `null` (no stdin)
+- `ArrayBufferView`
+- `Response`, `Request` with a buffered body or from `fetch()`. `ReadableStream` is not supported yet (TODO)
+- `number` (file descriptor)
+- `"pipe"` (default), which returns a `FileSink` for fast incremental writing
+- `"inherit"` which will inherit the parent's stdin
+
+**stdout** and **stderr**
+
+`stdout` and `stderr` can be one of:
+
+- `Bun.file()`
+- `null` (disable)
+- `number` (file descriptor)
+- `"pipe"` (default for `stdout`), returns a `ReadableStream`
+- `"inherit"` (default for `stderr`) which will inherit the parent's stdout/stderr
+
+**When to use `Bun.spawn` vs `Bun.spawnSync`**
+
+There are three main differences between `Bun.spawn` and `Bun.spawnSync`.
+
+1. `Bun.spawnSync` blocks the event loop until the subprocess exits. For HTTP servers, you probably should avoid using `Bun.spawnSync` but for CLI apps, you probably should use `Bun.spawnSync`.
+
+2. `spawnSync` returns a different object for `stdout` and `stderr` so you can read the data synchronously.
+
+| `spawn`          | `spawnSync` |
+| ---------------- | ----------- |
+| `ReadableStream` | `Buffer`    |
+
+3. `Bun.spawn` supports incrementally writing to `stdin`.
+
+If you need to read from `stdout` or `stderr` synchronously, you should use `Bun.spawnSync`. Otherwise, `Bun.spawn` is preferred.
+
+**More details**
+
+`Bun.spawn` returns a `Subprocess` object.
+
+More complete types are available in [`bun-types`](https://github.com/oven-sh/bun-types).
+
+```ts
+interface Subprocess {
+  readonly pid: number;
+  readonly stdin: FileSink | undefined;
+  readonly stdout: ReadableStream | number | undefined;
+  readonly stderr: ReadableStream | number | undefined;
+
+  readonly exitCode: number | undefined;
+
+  // Wait for the process to exit
+  readonly exited: Promise<number>;
+
+  // Keep Bun's process alive until the subprocess exits
+  ref(): void;
+
+  // Don't keep Bun's process alive until the subprocess exits
+  unref(): void;
+
+  // Kill the process
+  kill(code?: number): void;
+  readonly killed: boolean;
+}
+```
+
+## `Bun.which` – find the path to a binary
+
+Find the path to an executable, similar to typing `which` in your terminal.
+
+```ts
+const ls = Bun.which("ls");
+console.log(ls); // "/usr/bin/ls"
+```
+
+`Bun.which` defaults the `PATH` to the current `PATH` environment variable, but you can customize it
+
+```ts
+const ls = Bun.which("ls", {
+  PATH: "/usr/local/bin:/usr/bin:/bin",
+});
+console.log(ls); // "/usr/bin/ls"
+```
+
+`Bun.which` also accepts a `cwd` option to search for the binary in a specific directory.
+
+```ts
+const ls = Bun.which("ls", {
+  cwd: "/tmp",
+  PATH: "",
+});
+
+console.log(ls); // null
+```
+
+## `Bun.listen` & `Bun.connect` - TCP/TLS sockets
+
+`Bun.listen` and `Bun.connect` is bun's native TCP & TLS socket API. Use it to implement database clients, game servers – anything that needs to communicate over TCP (instead of HTTP). This is a low-level API intended for library authors and for advanced use cases.
+
+Start a TCP server with `Bun.listen`:
+
+```ts
+// The server
+Bun.listen({
+  hostname: "localhost",
+  port: 8080,
+  socket: {
+    open(socket) {
+      socket.write("hello world");
+    },
+    data(socket, data) {
+      console.log(data instanceof Uint8Array); // true
+    },
+    drain(socket) {
+      console.log("gimme more data");
+    },
+    close(socket) {
+      console.log("goodbye!");
+    },
+  },
+  // This is a TLS socket
+  // certFile: "/path/to/cert.pem",
+  // keyFile: "/path/to/key.pem",
+});
+```
+
+`Bun.connect` lets you create a TCP client:
+
+```ts
+// The client
+Bun.connect({
+  hostname: "localhost",
+  port: 8080,
+
+  socket: {
+    open(socket) {
+      socket.write("hello server, i'm the client!");
+    },
+    data(socket, message) {
+      socket.write("thanks for the message! Sincerely, " + socket.data.name);
+    },
+    drain(socket) {
+      console.log("my socket is ready for more data");
+    },
+    close(socket) {
+      console.log("");
+    },
+    timeout(socket) {
+      console.log("socket timed out");
+    },
+  },
+
+  data: {
+    name: "Clienty McClientface",
+  },
+});
+```
+
+#### Benchmark-driven API design
+
+Bun's TCP socket API is designed to go fast.
+
+Instead of using promises or assigning callbacks per socket instance (like Node.js' `EventEmitter` or the web-standard `WebSocket` API), assign all callbacks one time
+
+This design decision was made after benchmarking. For performance-sensitive servers, promise-heavy APIs or assigning callbacks per socket instance can cause significant garbage collector pressure and increase memory usage. If you're using a TCP server API, you probably care more about performance.
+
+```ts
+Bun.listen({
+  socket: {
+    open(socket) {},
+    data(socket, data) {},
+    drain(socket) {},
+    close(socket) {},
+    error(socket, error) {},
+  },
+  hostname: "localhost",
+  port: 8080,
+});
+```
+
+Instead of having to allocate unique functions for each instance of a socket, we can use each callback once for all sockets. This is a small optimization, but it adds up.
+
+How do you pass per-socket data to each socket object?
+
+`**data**` is a property on the `TCPSocket` & `TLSSocket` object that you can use to store per-socket data.
+
+```ts
+socket.data = { name: "Clienty McClientface" };
+```
+
+You can assign a default value to `data` in the `connect` or `listen` options.
+
+```ts
+Bun.listen({
+  socket: {
+    open(socket) {
+      console.log(socket.data); // { name: "Servery McServerface" }
+    },
+  },
+  data: {
+    name: "Servery McServerface",
+  },
+});
+```
+
+#### Hot-reloading TCP servers & clients
+
+`TCPSocket` (returned by `Bun.connect` and passed through callbacks in `Bun.listen`) has a `reload` method that lets you reload the callbacks for all related sockets (either just the one for `Bun.connect` or all sockets for `Bun.listen`):
+
+```ts
+const socket = Bun.connect({
+  hostname: "localhost",
+  port: 8080,
+  socket: {
+    data(socket, msg) {
+      console.log("wow i got a message!");
+
+      // this will be called the next time the server sends a message
+      socket.reload({
+        data(socket) {
+          console.log("okay, not so surprising this time");
+        },
+      });
+    },
+  },
+});
+```
+
+#### No buffering
+
+Currently, `TCPSocket` & `TLSSocket` in Bun do not buffer data. Adding support for corking (similar to `ServerWebSocket`) is planned, but it means you will need to handle backpressure yourself using the `drain` callback.
+
+Your TCP client/server will have abysmal performance if you don't consider buffering carefully.
+
+For example, this:
+
+```ts
+socket.write("h");
+socket.write("e");
+socket.write("l");
+socket.write("l");
+socket.write("o");
+```
+
+Performs significantly worse than:
+
+```ts
+socket.write("hello");
+```
+
+To simplify this for now, consider using `ArrayBufferSink` with the `{stream: true}` option:
+
+```ts
+const sink = new ArrayBufferSink({ stream: true, highWaterMark: 1024 });
+
+sink.write("h");
+sink.write("e");
+sink.write("l");
+sink.write("l");
+sink.write("o");
+
+queueMicrotask(() => {
+  var data = sink.flush();
+  if (!socket.write(data)) {
+    // put it back in the sink if the socket is full
+    sink.write(data);
+  }
+});
+```
+
+Builtin buffering is planned in a future version of Bun.
+
+## `Bun.peek` - read a promise without resolving it
+
+`Bun.peek` is a utility function that lets you read a promise's result without `await` or `.then`, but only if the promise has already fulfilled or rejected.
+
+This function was added in Bun v0.2.2.
+
+```ts
+import { peek } from "bun";
+
+const promise = Promise.resolve("hi");
+
+// no await!
+const result = peek(promise);
+
+console.log(result); // "hi"
+```
+
+`Bun.peek` is useful for performance-sensitive code that wants to reduce the number of extra microticks. It's an advanced API and you probably shouldn't use it unless you know what you're doing.
+
+```ts
+import { peek } from "bun";
+import { expect, test } from "bun:test";
+
+test("peek", () => {
+  const promise = Promise.resolve(true);
+
+  // no await necessary!
+  expect(peek(promise)).toBe(true);
+
+  // if we peek again, it returns the same value
+  const again = peek(promise);
+  expect(again).toBe(true);
+
+  // if we peek a non-promise, it returns the value
+  const value = peek(42);
+  expect(value).toBe(42);
+
+  // if we peek a pending promise, it returns the promise again
+  const pending = new Promise(() => {});
+  expect(peek(pending)).toBe(pending);
+
+  // If we peek a rejected promise, it:
+  // - returns the error
+  // - does not mark the promise as handled
+  const rejected = Promise.reject(
+    new Error("Succesfully tested promise rejection")
+  );
+  expect(peek(rejected).message).toBe("Succesfully tested promise rejection");
+});
+```
+
+`peek.status` lets you read the status of a promise without resolving it.
+
+```ts
+import { peek } from "bun";
+import { expect, test } from "bun:test";
+
+test("peek.status", () => {
+  const promise = Promise.resolve(true);
+  expect(peek.status(promise)).toBe("fulfilled");
+
+  const pending = new Promise(() => {});
+  expect(peek.status(pending)).toBe("pending");
+
+  const rejected = Promise.reject(new Error("oh nooo"));
+  expect(peek.status(rejected)).toBe("rejected");
+});
+```
 
 ## `Bun.write` – optimizing I/O
 
@@ -2151,9 +3017,9 @@ Open an in-memory database:
 import { Database } from "bun:sqlite";
 
 // all of these do the same thing
-var db = new Database(":memory:");
-var db = new Database();
-var db = new Database("");
+let db = new Database(":memory:");
+let db = new Database();
+let db = new Database("");
 ```
 
 Open read-write and throw if the database doesn't exist:
@@ -2191,7 +3057,7 @@ const db = new Database(readFileSync("mydb.sqlite"));
 Close a database:
 
 ```ts
-var db = new Database();
+let db = new Database();
 db.close();
 ```
 
@@ -2222,7 +3088,7 @@ You can bind parameters on any call to a statement.
 import { Database } from "bun:sqlite";
 
 // generate some data
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT)"
 );
@@ -2249,7 +3115,7 @@ Unlike `query()`, this does not cache the compiled query.
 import { Database } from "bun:sqlite";
 
 // generate some data
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT)"
 );
@@ -2283,7 +3149,7 @@ Creating a table:
 ```ts
 import { Database } from "bun:sqlite";
 
-var db = new Database();
+let db = new Database();
 db.exec(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT)"
 );
@@ -2294,7 +3160,7 @@ Inserting one row:
 ```ts
 import { Database } from "bun:sqlite";
 
-var db = new Database();
+let db = new Database();
 db.exec(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT)"
 );
@@ -2385,7 +3251,7 @@ SQLite has a built-in way to [serialize](https://www.sqlite.org/c3ref/serialize.
 `bun:sqlite` fully supports it:
 
 ```ts
-var db = new Database();
+let db = new Database();
 
 // write some data
 db.run(
@@ -2418,7 +3284,7 @@ To load a SQLite extension, call `Database.prototype.loadExtension(name)`:
 ```ts
 import { Database } from "bun:sqlite";
 
-var db = new Database();
+let db = new Database();
 
 db.loadExtension("myext");
 ```
@@ -2433,7 +3299,7 @@ import { Database } from "bun:sqlite";
 // on linux it will still check that a string was passed
 Database.setCustomSQLite("/path/to/sqlite.dylib");
 
-var db = new Database();
+let db = new Database();
 
 db.loadExtension("myext");
 ```
@@ -2465,7 +3331,7 @@ You can bind parameters on any call to a statement. Named parameters and positio
 import { Database } from "bun:sqlite";
 
 // setup
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT)"
 );
@@ -2473,7 +3339,7 @@ db.run("INSERT INTO foo VALUES (?)", "Welcome to bun!");
 db.run("INSERT INTO foo VALUES (?)", "Hello World!");
 
 // Statement object
-var statement = db.query("SELECT * FROM foo");
+let statement = db.query("SELECT * FROM foo");
 
 // returns all the rows
 statement.all();
@@ -2493,7 +3359,7 @@ Calling `all()` on a `Statement` instance runs the query and returns the rows as
 import { Database } from "bun:sqlite";
 
 // setup
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT, count INTEGER)"
 );
@@ -2506,7 +3372,7 @@ db.run(
 );
 
 // Statement object
-var statement = db.query("SELECT * FROM foo WHERE count = ?");
+let statement = db.query("SELECT * FROM foo WHERE count = ?");
 
 // return all the query results, binding 2 to the count parameter
 statement.all(2);
@@ -2526,7 +3392,7 @@ Calling `values()` on a `Statement` instance runs the query and returns the rows
 import { Database } from "bun:sqlite";
 
 // setup
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT, count INTEGER)"
 );
@@ -2539,7 +3405,7 @@ db.run(
 );
 
 // Statement object
-var statement = db.query("SELECT * FROM foo WHERE count = ?");
+let statement = db.query("SELECT * FROM foo WHERE count = ?");
 
 // return all the query results as an array of arrays, binding 2 to "count"
 statement.values(2);
@@ -2549,7 +3415,7 @@ statement.values(2);
 // ]
 
 // Statement object, but with named parameters
-var statement = db.query("SELECT * FROM foo WHERE count = $count");
+let statement = db.query("SELECT * FROM foo WHERE count = $count");
 
 // return all the query results as an array of arrays, binding 2 to "count"
 statement.values({ $count: 2 });
@@ -2569,7 +3435,7 @@ Calling `get()` on a `Statement` instance runs the query and returns the first r
 import { Database } from "bun:sqlite";
 
 // setup
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT, count INTEGER)"
 );
@@ -2582,14 +3448,14 @@ db.run(
 );
 
 // Statement object
-var statement = db.query("SELECT * FROM foo WHERE count = ?");
+let statement = db.query("SELECT * FROM foo WHERE count = ?");
 
 // return the first row as an object, binding 2 to the count parameter
 statement.get(2);
 // => { id: 1, greeting: "Welcome to bun!", count: 2 }
 
 // Statement object, but with named parameters
-var statement = db.query("SELECT * FROM foo WHERE count = $count");
+let statement = db.query("SELECT * FROM foo WHERE count = $count");
 
 // return the first row as an object, binding 2 to the count parameter
 statement.get({ $count: 2 });
@@ -2608,7 +3474,7 @@ This is useful if you want to repeatedly run a query, but don't care about the r
 import { Database } from "bun:sqlite";
 
 // setup
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT, count INTEGER)"
 );
@@ -2621,7 +3487,7 @@ db.run(
 );
 
 // Statement object (TODO: use a better example query)
-var statement = db.query("SELECT * FROM foo");
+let statement = db.query("SELECT * FROM foo");
 
 // run the query, returning nothing
 statement.run();
@@ -2641,7 +3507,7 @@ It is a good idea to finalize a statement when you are done with it, but the gar
 import { Database } from "bun:sqlite";
 
 // setup
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT, count INTEGER)"
 );
@@ -2654,7 +3520,7 @@ db.run(
 );
 
 // Statement object
-var statement = db.query("SELECT * FROM foo WHERE count = ?");
+let statement = db.query("SELECT * FROM foo WHERE count = ?");
 
 statement.finalize();
 
@@ -2670,7 +3536,7 @@ Calling `toString()` on a `Statement` instance prints the expanded SQL query. Th
 import { Database } from "bun:sqlite";
 
 // setup
-var db = new Database();
+let db = new Database();
 db.run(
   "CREATE TABLE foo (id INTEGER PRIMARY KEY AUTOINCREMENT, greeting TEXT, count INTEGER)"
 );
@@ -2823,11 +3689,13 @@ rustc --crate-type cdylib add.rs
 | i8        | `int8_t`   | `int8_t`                    |
 | i16       | `int16_t`  | `int16_t`                   |
 | i32       | `int32_t`  | `int32_t`, `int`            |
-| i64       | `int64_t`  | `int32_t`                   |
+| i64       | `int64_t`  | `int64_t`                   |
+| i64_fast  | `int64_t`  |                             |
 | u8        | `uint8_t`  | `uint8_t`                   |
 | u16       | `uint16_t` | `uint16_t`                  |
 | u32       | `uint32_t` | `uint32_t`                  |
-| u64       | `uint64_t` | `uint32_t`                  |
+| u64       | `uint64_t` | `uint64_t`                  |
+| u64_fast  | `uint64_t` |                             |
 | f32       | `float`    | `float`                     |
 | f64       | `double`   | `double`                    |
 | bool      | `bool`     |                             |
@@ -2910,7 +3778,7 @@ This is useful if using Node-API (napi) with Bun, and you've already loaded some
 ```ts
 import { CFunction } from "bun:ffi";
 
-var myNativeLibraryGetVersion = /* somehow, you got this pointer */
+let myNativeLibraryGetVersion = /* somehow, you got this pointer */
 
 const getVersion = new CFunction({
   returns: "cstring",
@@ -2982,7 +3850,7 @@ If you pass a `BigInt` to a function, it will be converted to a `number`
 
 ```ts
 import { ptr } from "bun:ffi";
-var myTypedArray = new Uint8Array(32);
+let myTypedArray = new Uint8Array(32);
 const myPtr = ptr(myTypedArray);
 ```
 
@@ -2990,13 +3858,63 @@ const myPtr = ptr(myTypedArray);
 
 ```ts
 import { ptr, toArrayBuffer } from "bun:ffi";
-var myTypedArray = new Uint8Array(32);
+let myTypedArray = new Uint8Array(32);
 const myPtr = ptr(myTypedArray);
 
-// toTypedArray accepts a `byteOffset` and `byteLength`
+// toArrayBuffer accepts a `byteOffset` and `byteLength`
 // if `byteLength` is not provided, it is assumed to be a null-terminated pointer
 myTypedArray = new Uint8Array(toArrayBuffer(myPtr, 0, 32), 0, 32);
 ```
+
+**To read data from a pointer**
+
+You have two options.
+
+For long-lived pointers, a `DataView` is the fastest option:
+
+```ts
+import { toArrayBuffer } from "bun:ffi";
+let myDataView = new DataView(toArrayBuffer(myPtr, 0, 32));
+
+console.log(
+  myDataView.getUint8(0, true),
+  myDataView.getUint8(1, true),
+  myDataView.getUint8(2, true),
+  myDataView.getUint8(3, true)
+);
+```
+
+For short-lived pointers, `read` is the fastest option:
+
+_Available in Bun v0.1.12+_
+
+```ts
+import { read } from "bun:ffi";
+
+console.log(
+  // ptr, byteOffset
+  read.u8(myPtr, 0),
+  read.u8(myPtr, 1),
+  read.u8(myPtr, 2),
+  read.u8(myPtr, 3)
+);
+```
+
+`read` behaves similarly to `DataView`, but it can be faster because it doesn't need to create a `DataView` or `ArrayBuffer`.
+
+| `FFIType` | `read` function |
+| --------- | --------------- |
+| ptr       | `read.ptr`      |
+| i8        | `read.i8`       |
+| i16       | `read.i16`      |
+| i32       | `read.i32`      |
+| i64       | `read.i64`      |
+| u8        | `read.u8`       |
+| u16       | `read.u16`      |
+| u32       | `read.u32`      |
+| u64       | `read.u64`      |
+| f32       | `read.f32`      |
+| f64       | `read.f64`      |
 
 **Memory management with pointers**:
 
@@ -3142,7 +4060,7 @@ const out = encode_png(
 );
 
 // assuming it is 0-terminated, it can be read like this:
-var png = new Uint8Array(toArrayBuffer(out));
+let png = new Uint8Array(toArrayBuffer(out));
 
 // save it to disk:
 await Bun.write("out.png", png);
@@ -3170,7 +4088,7 @@ const napi = require("./my-node-module.node");
 You can also use `process.dlopen`:
 
 ```js
-var mod = { exports: {} };
+let mod = { exports: {} };
 process.dlopen(mod, "./my-node-module.node");
 ```
 
@@ -3501,7 +4419,7 @@ The VSCode Dev Container in this repository is the easiest way to get started. I
 To develop on Linux, the following is required:
 
 - [Visual Studio Code](https://code.visualstudio.com/)
-- [Remote - Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension for Visual Studio Code
+- [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension for Visual Studio Code
 - [Docker](https://www.docker.com). If using WSL on Windows, it is recommended to use [Docker Desktop](https://docs.microsoft.com/en-us/windows/wsl/tutorials/wsl-containers) for its WSL2 integration.
 - [Dev Container CLI](https://www.npmjs.com/package/@devcontainers/cli): `npm install -g @devcontainers/cli`
 
@@ -3513,7 +4431,7 @@ make devcontainer-build
 ```
 
 Next, open VS Code in the `bun` repository.
-To open the dev container, open the command palette (Ctrl + Shift + P) and run: `Remote-Containers: Reopen in Container`.
+To open the dev container, open the command palette (Ctrl + Shift + P) and run: `Dev Containers: Reopen in Container`.
 
 You will then need to clone the GitHub repository inside that container.
 
@@ -3579,8 +4497,10 @@ curl -o zig.tar.gz -sL https://github.com/oven-sh/zig/releases/download/jul1/zig
 
 # This will extract to $HOME/.bun-tools/zig
 tar -xvf zig.tar.gz -C $HOME/.bun-tools/
+rm zig.tar.gz
 
 # Make sure it gets trusted
+# If you get an error 'No such xattr: com.apple.quarantine', that means it's already trusted and you can continue
 xattr -d com.apple.quarantine $HOME/.bun-tools/zig/zig
 ```
 
@@ -3619,8 +4539,8 @@ In `bun`:
 
 ```bash
 # If you omit --depth=1, `git submodule update` will take 17.5 minutes on 1gbps internet, mostly due to WebKit.
-git submodule update --init --recursive --progress --depth=1
-make vendor identifier-cache jsc dev
+git submodule update --init --recursive --progress --depth=1 --checkout
+make vendor identifier-cache bindings jsc dev
 ```
 
 #### Verify it worked (macOS)
